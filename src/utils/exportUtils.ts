@@ -408,6 +408,254 @@ function valMMonth(m: string): string {
   return m;
 }
 
+const UNSUPPORTED_COLOR_FN_RE = /(?:oklch|oklab|color-mix|\blch|\blab|\bcolor)\s*\(/i;
+
+function convertColorExprToRgba(
+  expr: string,
+  ctx: CanvasRenderingContext2D,
+  cache: Map<string, string>
+): string {
+  const key = expr.trim();
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  try {
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0)';
+    ctx.fillStyle = key;
+    ctx.fillRect(0, 0, 1, 1);
+    const data = ctx.getImageData(0, 0, 1, 1).data;
+    const r = data[0];
+    const g = data[1];
+    const b = data[2];
+    const a = data[3];
+    const converted =
+      a === 255 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${Number((a / 255).toFixed(3))})`;
+    cache.set(key, converted);
+    return converted;
+  } catch {
+    return 'rgb(0, 0, 0)';
+  }
+}
+
+/**
+ * Thay thế toàn bộ hàm màu CSS Color 4 (oklch, oklab, lch, lab, color-mix, color)
+ * sang rgb()/rgba() để html2canvas phân tích an toàn với Tailwind CSS v4.
+ */
+function sanitizeUnsupportedColorFunctions(
+  input: string,
+  ctx: CanvasRenderingContext2D,
+  cache: Map<string, string>
+): string {
+  if (!input || !UNSUPPORTED_COLOR_FN_RE.test(input)) return input;
+
+  const fnNames = ['color-mix', 'oklch', 'oklab', 'lch', 'lab', 'color'];
+  let out = '';
+  let i = 0;
+
+  while (i < input.length) {
+    let matchedFn: string | null = null;
+    const prevChar = i > 0 ? input[i - 1] : '';
+    const isWordBoundary = !prevChar || !/[a-zA-Z0-9_-]/.test(prevChar);
+
+    if (isWordBoundary) {
+      const rest = input.slice(i).toLowerCase();
+      for (const fn of fnNames) {
+        if (rest.startsWith(`${fn}(`)) {
+          matchedFn = fn;
+          break;
+        }
+      }
+    }
+
+    if (!matchedFn) {
+      out += input[i];
+      i += 1;
+      continue;
+    }
+
+    const startIdx = i;
+    let depth = 0;
+    let j = i + matchedFn.length;
+    while (j < input.length) {
+      if (input[j] === '(') depth += 1;
+      else if (input[j] === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          j += 1;
+          break;
+        }
+      }
+      j += 1;
+    }
+
+    const expr = input.slice(startIdx, j);
+    if (/\bvar\s*\(/i.test(expr)) {
+      // Giữ nguyên khi còn var(...) trong stylesheet thô; sẽ được giải ở bước computedStyle
+      out += expr;
+    } else {
+      out += convertColorExprToRgba(expr, ctx, cache);
+    }
+    i = j;
+  }
+
+  // Loại bỏ cú pháp nội suy không gian màu trong gradient (vd: "linear-gradient(to right in oklab, ...)")
+  out = out.replace(
+    /\s+in\s+(?:oklch|oklab|srgb|srgb-linear|lab|lch|hsl|hwb)(?:\s+(?:shorter|longer|increasing|decreasing)\s+hue)?/gi,
+    ''
+  );
+
+  return out;
+}
+
+const COLOR_STYLE_PROPS: Array<{ css: string; camel: keyof CSSStyleDeclaration }> = [
+  { css: 'color', camel: 'color' },
+  { css: 'background-color', camel: 'backgroundColor' },
+  { css: 'border-top-color', camel: 'borderTopColor' },
+  { css: 'border-right-color', camel: 'borderRightColor' },
+  { css: 'border-bottom-color', camel: 'borderBottomColor' },
+  { css: 'border-left-color', camel: 'borderLeftColor' },
+  { css: 'outline-color', camel: 'outlineColor' },
+  { css: 'text-decoration-color', camel: 'textDecorationColor' },
+  { css: 'box-shadow', camel: 'boxShadow' },
+  { css: 'text-shadow', camel: 'textShadow' },
+  { css: 'background-image', camel: 'backgroundImage' },
+  { css: 'caret-color', camel: 'caretColor' },
+  { css: 'fill', camel: 'fill' as keyof CSSStyleDeclaration },
+  { css: 'stroke', camel: 'stroke' as keyof CSSStyleDeclaration },
+];
+
+function sanitizeClonedDocumentColors(clonedDoc: Document, rootElement: HTMLElement | null): void {
+  const probeCanvas = document.createElement('canvas');
+  probeCanvas.width = 1;
+  probeCanvas.height = 1;
+  const ctx = probeCanvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return;
+
+  const cache = new Map<string, string>();
+  const clonedWin = clonedDoc.defaultView || window;
+
+  // 1. Thu thập và ghi đè toàn bộ biến màu CSS :root (Tailwind v4 --color-*) sang rgb()/rgba()
+  const rootVarOverrides: string[] = [];
+  const rootComputed = window.getComputedStyle(document.documentElement);
+  const seenVars = new Set<string>();
+
+  const collectCustomProps = (rules: CSSRuleList | undefined) => {
+    if (!rules) return;
+    for (let r = 0; r < rules.length; r += 1) {
+      const rule = rules[r];
+      if ('style' in rule && (rule as CSSStyleRule).style) {
+        const style = (rule as CSSStyleRule).style;
+        for (let p = 0; p < style.length; p += 1) {
+          const propName = style[p];
+          if (propName && propName.startsWith('--') && !seenVars.has(propName)) {
+            seenVars.add(propName);
+            const resolved = rootComputed.getPropertyValue(propName).trim();
+            if (resolved && UNSUPPORTED_COLOR_FN_RE.test(resolved)) {
+              const safeVal = sanitizeUnsupportedColorFunctions(resolved, ctx, cache);
+              rootVarOverrides.push(`  ${propName}: ${safeVal} !important;`);
+            }
+          }
+        }
+      }
+      if ('cssRules' in rule) {
+        try {
+          collectCustomProps((rule as CSSGroupingRule).cssRules);
+        } catch {
+          // ignore cross-origin nested rules
+        }
+      }
+    }
+  };
+
+  for (let s = 0; s < document.styleSheets.length; s += 1) {
+    try {
+      collectCustomProps(document.styleSheets[s].cssRules);
+    } catch {
+      // ignore cross-origin stylesheets
+    }
+  }
+
+  // 2. Làm sạch các thẻ <style> nội tuyến trong tài liệu clone
+  clonedDoc.querySelectorAll('style').forEach((styleEl) => {
+    const cssText = styleEl.textContent || '';
+    if (UNSUPPORTED_COLOR_FN_RE.test(cssText) || /\bin\s+(?:oklch|oklab)\b/i.test(cssText)) {
+      styleEl.textContent = sanitizeUnsupportedColorFunctions(cssText, ctx, cache);
+    }
+  });
+
+  if (rootVarOverrides.length > 0 && clonedDoc.head) {
+    const overrideStyle = clonedDoc.createElement('style');
+    overrideStyle.textContent = `:root, :host {\n${rootVarOverrides.join('\n')}\n}`;
+    clonedDoc.head.appendChild(overrideStyle);
+  }
+
+  // 3. Quét computedStyle của html, body, chuỗi cha và toàn bộ cây phần tử mục tiêu
+  const elementsToSanitize = new Set<HTMLElement>();
+  if (clonedDoc.documentElement) elementsToSanitize.add(clonedDoc.documentElement);
+  if (clonedDoc.body) elementsToSanitize.add(clonedDoc.body);
+
+  if (rootElement) {
+    let cur: HTMLElement | null = rootElement;
+    while (cur) {
+      elementsToSanitize.add(cur);
+      cur = cur.parentElement;
+    }
+    rootElement.querySelectorAll<HTMLElement>('*').forEach((el) => {
+      elementsToSanitize.add(el);
+    });
+  }
+
+  elementsToSanitize.forEach((el) => {
+    let cs: CSSStyleDeclaration;
+    try {
+      cs = clonedWin.getComputedStyle(el);
+    } catch {
+      return;
+    }
+    for (const prop of COLOR_STYLE_PROPS) {
+      const val = String(cs[prop.camel] || '');
+      if (val && (UNSUPPORTED_COLOR_FN_RE.test(val) || /\bin\s+(?:oklch|oklab)\b/i.test(val))) {
+        const safe = sanitizeUnsupportedColorFunctions(val, ctx, cache);
+        el.style.setProperty(prop.css, safe, 'important');
+      }
+    }
+  });
+}
+
+/**
+ * Render phần tử DOM ra Canvas an toàn với Tailwind CSS v4 (tự chuyển đổi oklch/oklab sang rgb/rgba)
+ */
+export async function renderElementToCanvas(
+  element: HTMLElement,
+  options?: {
+    scale?: number;
+    windowWidth?: number;
+    onCloneElement?: (clonedDoc: Document, clonedEl: HTMLElement | null) => void;
+  }
+): Promise<HTMLCanvasElement> {
+  const markerAttr = 'data-pdf-capture-target';
+  const markerVal = `capture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  element.setAttribute(markerAttr, markerVal);
+
+  try {
+    return await html2canvas(element, {
+      scale: options?.scale ?? 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+      windowWidth: options?.windowWidth,
+      onclone: (clonedDoc) => {
+        const clonedEl = clonedDoc.querySelector<HTMLElement>(`[${markerAttr}="${markerVal}"]`);
+        sanitizeClonedDocumentColors(clonedDoc, clonedEl);
+        options?.onCloneElement?.(clonedDoc, clonedEl);
+      },
+    });
+  } finally {
+    element.removeAttribute(markerAttr);
+  }
+}
+
 /**
  * Tạo đối tượng jsPDF khổ A4 từ phần tử DOM #printable-order-a4 để dùng cho tải về máy hoặc lưu lên Server
  */
@@ -419,14 +667,10 @@ export async function generateOrderPdfDocument(elementId: string): Promise<jsPDF
   }
 
   try {
-    const canvas = await html2canvas(element, {
+    const canvas = await renderElementToCanvas(element, {
       scale: 2,
-      useCORS: true,
-      logging: false,
-      backgroundColor: '#ffffff',
       windowWidth: 1024,
-      onclone: (clonedDoc) => {
-        const clonedEl = clonedDoc.getElementById(elementId);
+      onCloneElement: (_clonedDoc, clonedEl) => {
         if (clonedEl) {
           clonedEl.style.width = '794px';
           clonedEl.style.maxWidth = '794px';

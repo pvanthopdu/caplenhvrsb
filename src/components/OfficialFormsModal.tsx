@@ -23,7 +23,7 @@ import {
   ClipboardCheck,
 } from 'lucide-react';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import { renderElementToCanvas } from '../utils/exportUtils';
 
 export type OfficialFormTab = 'NOTICE' | 'GENERAL' | 'CREW' | 'PASSENGER' | 'APPENDIX01';
 
@@ -70,11 +70,8 @@ export const OfficialFormsModal: React.FC<OfficialFormsModalProps> = ({
     try {
       setIsExporting(true);
       const element = printAreaRef.current;
-      const canvas = await html2canvas(element, {
+      const canvas = await renderElementToCanvas(element, {
         scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
       });
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
