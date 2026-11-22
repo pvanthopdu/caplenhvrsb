@@ -7,7 +7,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Anchor,
+  Calendar,
+  Check,
   CheckCircle2,
+  ChevronDown,
+  Clock,
   Eye,
   Filter,
   Lock,
@@ -26,6 +30,7 @@ import {
   getStatusInfo,
 } from '../../utils/formatters';
 import { getUserAssignedPortId, normalizeStatus } from '../../utils/userPermissions';
+import { BpHeroBanner } from '../../components/bp/BpHeroBanner';
 import { BpDossierReadOnlyModal } from '../../components/bp/BpDossierReadOnlyModal';
 import { BpLiftStopModal } from '../../components/bp/BpStopActionModals';
 import { BpDepartureControlModal } from '../../components/bp/BpDepartureControlModal';
@@ -43,6 +48,67 @@ type StatusGroupFilter =
   | 'AT_SEA'
   | 'FINISHED'
   | 'PRE_ISSUANCE';
+
+const CardWaveAccent: React.FC<{ color: string }> = ({ color }) => (
+  <svg
+    viewBox="0 0 220 56"
+    preserveAspectRatio="none"
+    aria-hidden="true"
+    className="absolute right-0 bottom-0 w-[72%] h-12 pointer-events-none select-none"
+  >
+    <path
+      d="M0 44 C45 34, 85 52, 130 32 C168 15, 194 24, 220 12 L220 56 L0 56 Z"
+      fill={color}
+      fillOpacity="0.22"
+    />
+    <path
+      d="M28 56 C78 36, 120 48, 166 28 C190 18, 206 20, 220 14 L220 56 Z"
+      fill={color}
+      fillOpacity="0.16"
+    />
+  </svg>
+);
+
+const HeldClockStopIcon: React.FC = () => (
+  <svg viewBox="0 0 36 36" className="w-8 h-8" fill="none" aria-hidden="true">
+    <circle cx="16.5" cy="17.5" r="11" fill="#b91c1c" />
+    <path d="M16.5 11.5V17.5L20.5 19.8" stroke="#ffffff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+    <circle cx="25.5" cy="24.5" r="6" fill="#fef2f2" stroke="#b91c1c" strokeWidth="2" />
+    <path d="M23.2 22.2L27.8 26.8" stroke="#b91c1c" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+);
+
+const ShieldStarIcon: React.FC = () => (
+  <svg viewBox="0 0 36 36" className="w-8 h-8" fill="none" aria-hidden="true">
+    <path
+      d="M18 4.5L7.5 8.8V17.2C7.5 23.7 11.9 29.4 18 31.5C24.1 29.4 28.5 23.7 28.5 17.2V8.8L18 4.5Z"
+      fill="#0b5ed7"
+    />
+    <path
+      d="M18 11.2L19.9 15.1L24.2 15.7L21.1 18.7L21.8 23L18 21L14.2 23L14.9 18.7L11.8 15.7L16.1 15.1L18 11.2Z"
+      fill="#ffffff"
+    />
+  </svg>
+);
+
+const CheckeredFlagIcon: React.FC = () => (
+  <svg viewBox="0 0 36 36" className="w-8 h-8" fill="none" aria-hidden="true">
+    <path d="M10.5 8V29" stroke="#5b21b6" strokeWidth="2.5" strokeLinecap="round" />
+    <path
+      d="M11.5 9.5C15.5 7.5 19.5 11.5 24 9.5C25.5 8.8 26.8 8.6 28 9V20.5C26.5 20.1 25.2 20.4 23.8 21C19.5 22.9 15.5 19 11.5 21V9.5Z"
+      fill="#ffffff"
+      stroke="#5b21b6"
+      strokeWidth="2"
+      strokeLinejoin="round"
+    />
+    <rect x="12" y="10" width="3.8" height="3.5" fill="#6d28d9" />
+    <rect x="19.6" y="10.4" width="3.8" height="3.5" fill="#6d28d9" />
+    <rect x="15.8" y="13.5" width="3.8" height="3.5" fill="#6d28d9" />
+    <rect x="23.4" y="13.3" width="3.8" height="3.5" fill="#6d28d9" />
+    <rect x="12" y="16.8" width="3.8" height="3.5" fill="#6d28d9" />
+    <rect x="19.6" y="17.1" width="3.8" height="3.5" fill="#6d28d9" />
+  </svg>
+);
 
 export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser, initialTripId }) => {
   const [trips, setTrips] = useState<TripRecord[]>([]);
@@ -178,6 +244,10 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
     reloadData();
   };
 
+  const toggleStatusCard = (target: StatusGroupFilter) => {
+    setStatusFilter((prev) => (prev === target ? 'ALL' : target));
+  };
+
   const renderTripAlerts = (trip: TripRecord) => {
     const activeStop = activeStopsMap.get(trip.id);
     const control = repository.getLatestKiemSoatForTrip(trip.id);
@@ -240,9 +310,9 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
         <button
           type="button"
           onClick={() => setViewTrip(trip)}
-          className="min-h-[44px] px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-800 flex items-center gap-1.5 cursor-pointer"
+          className="min-h-[42px] px-3.5 py-2 rounded-xl border border-[#cfe0f7] bg-white hover:bg-[#f2f7ff] text-xs font-bold text-[#143a70] flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap"
         >
-          <Eye className="w-4 h-4 text-slate-600" />
+          <Eye className="w-4 h-4 text-[#2e67b8]" />
           <span>Xem hồ sơ</span>
         </button>
 
@@ -252,7 +322,7 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
             disabled={!canControlDep}
             onClick={() => setControlTrip(trip)}
             title={!canControlDep ? 'Chỉ Biên phòng gắn với bến xuất phát mới được kiểm soát xuất bến' : undefined}
-            className="min-h-[44px] px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+            className="min-h-[42px] px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition whitespace-nowrap"
           >
             <ShieldCheck className="w-4 h-4" />
             <span>Kiểm soát xuất bến</span>
@@ -263,7 +333,7 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
           <button
             type="button"
             onClick={() => handleConfirmArrival(trip)}
-            className="min-h-[44px] px-3.5 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+            className="min-h-[42px] px-3.5 py-2 rounded-xl bg-[#0d62e8] hover:bg-[#0950bf] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition whitespace-nowrap"
           >
             <Anchor className="w-4 h-4" />
             <span>Xác nhận cập bến</span>
@@ -274,7 +344,7 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
           <button
             type="button"
             onClick={() => setLiftModalState({ stop: activeStop || null, trip })}
-            className="min-h-[44px] px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+            className="min-h-[42px] px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap"
           >
             <ShieldCheck className="w-4 h-4" />
             <span>Gỡ tạm giữ</span>
@@ -286,58 +356,109 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
-            {bpConfig.unitDisplayName} · Kiểm soát cuối cùng sau khi có Giấy phép
-          </p>
-          <h1 className="text-lg sm:text-xl font-bold text-slate-900">
-            Bảng chuyến trong ngày & Kiểm soát xuất bến
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Tự động làm mới 30s · Cập nhật lúc{' '}
-            <span className="font-mono tabular-nums">{lastUpdated.toLocaleTimeString('vi-VN')}</span>
-            {userAssignedPort && (
-              <> · Bến phụ trách: <strong>{userAssignedPort === 'PORT-01' ? 'Đảo Lớn' : 'Đảo Bé'}</strong></>
-            )}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={reloadData}
-          className="min-h-[44px] px-4 py-2 rounded-lg border border-slate-300 bg-slate-50 hover:bg-slate-100 text-sm font-semibold text-slate-800 flex items-center justify-center gap-2 shrink-0 cursor-pointer"
-        >
-          <RefreshCw className="w-4 h-4" />
-          <span>Làm mới</span>
-        </button>
-      </div>
+      {/* Banner đầu trang Đồn Biên phòng Lý Sơn */}
+      <BpHeroBanner
+        kicker={bpConfig.unitDisplayName}
+        title="Bảng chuyến trong ngày & Kiểm soát xuất bến"
+        subtitleNode={
+          <>
+            <span className="inline-flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-[#3470c7] shrink-0" />
+              <span>Tự động làm mới 30s</span>
+            </span>
+            <span className="text-[#9ec0ec] hidden sm:inline" aria-hidden="true">|</span>
+            <span className="inline-flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-[#3470c7] shrink-0" />
+              <span>
+                Cập nhật lúc{' '}
+                <strong className="font-mono tabular-nums text-[#0b2e66]">
+                  {lastUpdated.toLocaleTimeString('vi-VN')}
+                </strong>
+              </span>
+            </span>
+            <span className="text-[#9ec0ec] hidden sm:inline" aria-hidden="true">|</span>
+            <span className="inline-flex items-center gap-1.5">
+              <RefreshCw className="w-3.5 h-3.5 text-[#3470c7] shrink-0" />
+              <span>
+                Bến phụ trách:{' '}
+                <strong className="text-[#0b2e66]">
+                  {userAssignedPort
+                    ? userAssignedPort === 'PORT-01'
+                      ? 'Đảo Lớn'
+                      : 'Đảo Bé'
+                    : 'Đảo Lớn & Đảo Bé'}
+                </strong>
+              </span>
+            </span>
+          </>
+        }
+        rightAction={
+          <button
+            type="button"
+            onClick={reloadData}
+            className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-b from-[#1a7ff5] to-[#0a57c8] hover:from-[#2488ff] hover:to-[#084bb0] text-white text-sm font-bold flex items-center justify-center gap-2 shadow-[0_8px_18px_-6px_rgba(10,87,200,0.6)] border border-white/35 cursor-pointer whitespace-nowrap transition active:scale-[0.98]"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span>Làm mới</span>
+          </button>
+        }
+      />
 
+      {/* Thanh trạng thái ca trực Biên phòng */}
       {shiftCheck.allowed && shiftCheck.shift ? (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-2.5 text-xs sm:text-sm font-semibold text-emerald-950 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
-            <span className="truncate">
-              Đang trong ca trực: <strong>{shiftCheck.shift.shiftName}</strong>
-              {currentUser.email ? ` (${currentUser.email})` : ''}
+        <div className="rounded-2xl border border-[#b4ecc9] bg-gradient-to-r from-[#e9fcf1] via-[#effdf5] to-[#def8ea] px-4 py-2.5 shadow-[0_4px_14px_-8px_rgba(15,157,72,0.22)] flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-6 h-6 rounded-full bg-[#0f9d48] text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Check className="w-3.5 h-3.5 stroke-[3]" />
+            </span>
+            <span className="text-xs sm:text-sm text-[#0c3f24] truncate">
+              Đang trong ca trực:{' '}
+              <strong className="font-extrabold text-[#06321b]">
+                {shiftCheck.shift.shiftName}
+              </strong>
+              {currentUser.email ? (
+                <span className="text-[#195335]"> ({currentUser.email})</span>
+              ) : null}
             </span>
           </div>
-          <span className="text-[11px] font-mono text-emerald-800 shrink-0">
-            {shiftCheck.shift.startTime}–{shiftCheck.shift.endTime}
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#c5f2d6] text-[#0c6b36] text-xs font-bold font-mono tabular-nums shrink-0">
+            <Clock className="w-3.5 h-3.5 text-[#0f9d48]" />
+            <span>
+              {shiftCheck.shift.startTime}–{shiftCheck.shift.endTime}
+            </span>
+          </span>
+        </div>
+      ) : shiftCheck.allowed ? (
+        <div className="rounded-2xl border border-[#b4ecc9] bg-gradient-to-r from-[#e9fcf1] via-[#effdf5] to-[#def8ea] px-4 py-2.5 shadow-[0_4px_14px_-8px_rgba(15,157,72,0.22)] flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-6 h-6 rounded-full bg-[#0f9d48] text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Check className="w-3.5 h-3.5 stroke-[3]" />
+            </span>
+            <span className="text-xs sm:text-sm text-[#0c3f24] truncate">
+              Đang trong ca trực:{' '}
+              <strong className="font-extrabold text-[#06321b]">
+                Ca trực Biên phòng ({currentUser.fullName})
+              </strong>
+              {currentUser.email ? (
+                <span className="text-[#195335]"> ({currentUser.email})</span>
+              ) : null}
+            </span>
+          </div>
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#c5f2d6] text-[#0c6b36] text-xs font-bold font-mono tabular-nums shrink-0">
+            <Clock className="w-3.5 h-3.5 text-[#0f9d48]" />
+            <span>00:00–23:59</span>
           </span>
         </div>
       ) : (
-        !shiftCheck.allowed && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs sm:text-sm font-semibold text-amber-950 flex items-center gap-2">
-            <Lock className="w-4 h-4 text-amber-700 shrink-0" />
-            <span>{shiftCheck.reason}</span>
-          </div>
-        )
+        <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs sm:text-sm font-semibold text-amber-950 flex items-center gap-2.5">
+          <Lock className="w-4 h-4 text-amber-700 shrink-0" />
+          <span>{shiftCheck.reason}</span>
+        </div>
       )}
 
       {actionBanner && (
         <div
-          className={`rounded-xl border px-4 py-3 text-xs sm:text-sm font-semibold flex items-center justify-between gap-2 ${
+          className={`rounded-2xl border px-4 py-3 text-xs sm:text-sm font-semibold flex items-center justify-between gap-2 ${
             actionBanner.type === 'ok'
               ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
               : 'border-red-300 bg-red-50 text-red-900'
@@ -361,45 +482,149 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
         </div>
       )}
 
-      {/* Summary Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5">
-          <p className="text-xs text-emerald-800 font-medium">Đã có GP • Chờ kiểm soát</p>
-          <p className="text-2xl font-bold font-mono tabular-nums text-emerald-900 mt-1">{metrics.readyControl}</p>
-        </div>
-        <div className="rounded-xl border border-red-200 bg-red-50/70 p-3.5">
-          <p className="text-xs text-red-700 font-medium">Đang tạm giữ Biên phòng</p>
-          <p className="text-2xl font-bold font-mono tabular-nums text-red-800 mt-1">{metrics.held}</p>
-        </div>
-        <div className="rounded-xl border border-sky-200 bg-sky-50/70 p-3.5">
-          <p className="text-xs text-sky-800 font-medium">Đã xuất bến (Trên biển)</p>
-          <p className="text-2xl font-bold font-mono tabular-nums text-sky-900 mt-1">{metrics.atSea}</p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-3.5">
-          <p className="text-xs text-slate-500">Đã cập bến an toàn</p>
-          <p className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">{metrics.arrived}</p>
-        </div>
+      {/* 4 Thẻ thống kê trạng thái chuyến */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
+        {/* 1. Đã có GP • Chờ kiểm soát */}
+        <button
+          type="button"
+          onClick={() => toggleStatusCard('READY_CONTROL')}
+          className={`group relative overflow-hidden rounded-2xl border text-left p-4 sm:px-5 sm:py-4 transition-all duration-150 cursor-pointer bg-gradient-to-br from-[#effdf5] via-[#e4faee] to-[#cef3dd] shadow-[0_8px_20px_-14px_rgba(16,155,74,0.35)] hover:-translate-y-0.5 ${
+            statusFilter === 'READY_CONTROL'
+              ? 'border-[#16a34a] ring-2 ring-[#16a34a]/25'
+              : 'border-[#b3eccb] hover:border-[#16a34a]'
+          }`}
+        >
+          <span
+            className="absolute left-0 top-0 bottom-0 w-1.5 bg-[#16a34a] rounded-l-2xl"
+            aria-hidden="true"
+          />
+          <CardWaveAccent color="#34d399" />
+          <div className="relative z-10 flex items-center gap-4 pl-1.5">
+            <div className="w-14 h-14 rounded-full bg-[#c5f0d6] text-[#117a3b] flex items-center justify-center shrink-0 shadow-inner">
+              <Ship className="w-7 h-7 stroke-[2.2]" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[13px] font-extrabold text-[#0f6b35] leading-snug truncate">
+                Đã có GP • Chờ kiểm soát
+              </p>
+              <p className="text-3xl font-black font-mono tabular-nums text-[#0b7a38] leading-tight mt-1">
+                {metrics.readyControl}
+              </p>
+            </div>
+          </div>
+        </button>
+
+        {/* 2. Đang tạm giữ Biên phòng */}
+        <button
+          type="button"
+          onClick={() => toggleStatusCard('HELD')}
+          className={`group relative overflow-hidden rounded-2xl border text-left p-4 sm:px-5 sm:py-4 transition-all duration-150 cursor-pointer bg-gradient-to-br from-[#fff5f5] via-[#feeaea] to-[#fcd6d6] shadow-[0_8px_20px_-14px_rgba(220,38,38,0.32)] hover:-translate-y-0.5 ${
+            statusFilter === 'HELD'
+              ? 'border-[#dc2626] ring-2 ring-[#dc2626]/25'
+              : 'border-[#f8c1c1] hover:border-[#dc2626]'
+          }`}
+        >
+          <span
+            className="absolute left-0 top-0 bottom-0 w-1.5 bg-[#dc2626] rounded-l-2xl"
+            aria-hidden="true"
+          />
+          <CardWaveAccent color="#f87171" />
+          <div className="relative z-10 flex items-center gap-4 pl-1.5">
+            <div className="w-14 h-14 rounded-full bg-[#fbd0d0] flex items-center justify-center shrink-0 shadow-inner">
+              <HeldClockStopIcon />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[13px] font-extrabold text-[#b91c1c] leading-snug truncate">
+                Đang tạm giữ Biên phòng
+              </p>
+              <p className="text-3xl font-black font-mono tabular-nums text-[#b91c1c] leading-tight mt-1">
+                {metrics.held}
+              </p>
+            </div>
+          </div>
+        </button>
+
+        {/* 3. Đã xuất bến (Trên biển) */}
+        <button
+          type="button"
+          onClick={() => toggleStatusCard('AT_SEA')}
+          className={`group relative overflow-hidden rounded-2xl border text-left p-4 sm:px-5 sm:py-4 transition-all duration-150 cursor-pointer bg-gradient-to-br from-[#f1f8ff] via-[#e4f1ff] to-[#cce3ff] shadow-[0_8px_20px_-14px_rgba(13,98,232,0.35)] hover:-translate-y-0.5 ${
+            statusFilter === 'AT_SEA'
+              ? 'border-[#0d62e8] ring-2 ring-[#0d62e8]/25'
+              : 'border-[#b3d4ff] hover:border-[#0d62e8]'
+          }`}
+        >
+          <span
+            className="absolute left-0 top-0 bottom-0 w-1.5 bg-[#1565df] rounded-l-2xl"
+            aria-hidden="true"
+          />
+          <CardWaveAccent color="#60a5fa" />
+          <div className="relative z-10 flex items-center gap-4 pl-1.5">
+            <div className="w-14 h-14 rounded-full bg-[#c4e0ff] flex items-center justify-center shrink-0 shadow-inner">
+              <ShieldStarIcon />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[13px] font-extrabold text-[#0b4eb8] leading-snug truncate">
+                Đã xuất bến (Trên biển)
+              </p>
+              <p className="text-3xl font-black font-mono tabular-nums text-[#0b50b8] leading-tight mt-1">
+                {metrics.atSea}
+              </p>
+            </div>
+          </div>
+        </button>
+
+        {/* 4. Đã cập bến an toàn */}
+        <button
+          type="button"
+          onClick={() => toggleStatusCard('FINISHED')}
+          className={`group relative overflow-hidden rounded-2xl border text-left p-4 sm:px-5 sm:py-4 transition-all duration-150 cursor-pointer bg-gradient-to-br from-[#f8f3ff] via-[#efe6ff] to-[#dfd0ff] shadow-[0_8px_20px_-14px_rgba(109,40,217,0.32)] hover:-translate-y-0.5 ${
+            statusFilter === 'FINISHED'
+              ? 'border-[#7c3aed] ring-2 ring-[#7c3aed]/25'
+              : 'border-[#d2beff] hover:border-[#7c3aed]'
+          }`}
+        >
+          <span
+            className="absolute left-0 top-0 bottom-0 w-1.5 bg-[#7c3aed] rounded-l-2xl"
+            aria-hidden="true"
+          />
+          <CardWaveAccent color="#a78bfa" />
+          <div className="relative z-10 flex items-center gap-4 pl-1.5">
+            <div className="w-14 h-14 rounded-full bg-[#dccaff] flex items-center justify-center shrink-0 shadow-inner">
+              <CheckeredFlagIcon />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[13px] font-extrabold text-[#5b21b6] leading-snug truncate">
+                Đã cập bến an toàn
+              </p>
+              <p className="text-3xl font-black font-mono tabular-nums text-[#5b21b6] leading-tight mt-1">
+                {metrics.arrived}
+              </p>
+            </div>
+          </div>
+        </button>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl border border-slate-200 p-3.5 grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+      {/* Thanh tìm kiếm & bộ lọc */}
+      <div className="bg-white/95 rounded-2xl border border-[#dce8f8] p-3 shadow-[0_6px_20px_-12px_rgba(11,78,168,0.16)] grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="relative flex items-center">
+          <Search className="w-4 h-4 text-[#4a6b9a] absolute left-3.5 pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Tìm tàu, mã hồ sơ, số Giấy phép..."
-            className="w-full min-h-[44px] pl-9 pr-3 rounded-lg border border-slate-300 text-sm focus:border-sky-600 focus:outline-none"
+            className="w-full min-h-[44px] pl-10 pr-3.5 rounded-xl border border-[#d6e4f5] bg-[#fafdff] focus:bg-white text-sm text-[#0c2b59] placeholder:text-[#6b86ad] focus:border-[#0d62e8] focus:ring-2 focus:ring-[#0d62e8]/15 focus:outline-none transition"
           />
         </div>
 
         <div className="relative flex items-center">
-          <Filter className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+          <Filter className="w-4 h-4 text-[#234d8a] absolute left-3.5 pointer-events-none" />
           <select
             value={portFilter}
             onChange={(e) => setPortFilter(e.target.value)}
-            className="w-full min-h-[44px] pl-9 pr-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-800 focus:border-sky-600 focus:outline-none"
+            aria-label="Lọc theo bến cảng"
+            className="w-full min-h-[44px] pl-10 pr-9 rounded-xl border border-[#d6e4f5] bg-white text-sm font-semibold text-[#0c2b59] appearance-none focus:border-[#0d62e8] focus:ring-2 focus:ring-[#0d62e8]/15 focus:outline-none cursor-pointer transition"
           >
             <option value="ALL">Tất cả bến cảng</option>
             {ports.map((p) => (
@@ -408,20 +633,26 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
               </option>
             ))}
           </select>
+          <ChevronDown className="w-4 h-4 text-[#234d8a] absolute right-3.5 pointer-events-none" />
         </div>
 
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as StatusGroupFilter)}
-          className="w-full min-h-[44px] px-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-800 focus:border-sky-600 focus:outline-none"
-        >
-          <option value="ALL">Tất cả trạng thái</option>
-          <option value="READY_CONTROL">Chờ Biên phòng kiểm soát xuất bến</option>
-          <option value="HELD">Đang tạm giữ Biên phòng</option>
-          <option value="AT_SEA">Đã xuất bến (Chờ xác nhận cập bến)</option>
-          <option value="FINISHED">Đã cập bến / Hết hạn / Thu hồi</option>
-          <option value="PRE_ISSUANCE">Đang xử lý tại BQL/Sở (Xem trước)</option>
-        </select>
+        <div className="relative flex items-center">
+          <Ship className="w-4 h-4 text-[#234d8a] absolute left-3.5 pointer-events-none" />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusGroupFilter)}
+            aria-label="Lọc theo trạng thái"
+            className="w-full min-h-[44px] pl-10 pr-9 rounded-xl border border-[#d6e4f5] bg-white text-sm font-semibold text-[#0c2b59] appearance-none focus:border-[#0d62e8] focus:ring-2 focus:ring-[#0d62e8]/15 focus:outline-none cursor-pointer transition"
+          >
+            <option value="ALL">Tất cả trạng thái</option>
+            <option value="READY_CONTROL">Chờ Biên phòng kiểm soát xuất bến</option>
+            <option value="HELD">Đang tạm giữ Biên phòng</option>
+            <option value="AT_SEA">Đã xuất bến (Chờ xác nhận cập bến)</option>
+            <option value="FINISHED">Đã cập bến / Hết hạn / Thu hồi</option>
+            <option value="PRE_ISSUANCE">Đang xử lý tại BQL/Sở (Xem trước)</option>
+          </select>
+          <ChevronDown className="w-4 h-4 text-[#234d8a] absolute right-3.5 pointer-events-none" />
+        </div>
       </div>
 
       {/* Mobile Cards (< lg) */}
@@ -436,29 +667,29 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
           return (
             <div
               key={trip.id}
-              className={`rounded-xl border bg-white p-4 space-y-3 shadow-xs ${
+              className={`rounded-2xl border bg-white p-4 space-y-3 shadow-xs ${
                 activeStop
-                  ? 'border-red-400 bg-red-50/20'
+                  ? 'border-red-300 bg-red-50/25'
                   : normalizeStatus(trip.status) === 'DA_CAP_PHEP'
-                  ? 'border-emerald-400 bg-emerald-50/15'
-                  : 'border-slate-200'
+                  ? 'border-emerald-300 bg-emerald-50/20'
+                  : 'border-[#dce8f8]'
               }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <Ship className="w-4 h-4 text-sky-700 shrink-0" />
-                    <h2 className="font-bold text-slate-900 truncate">
+                    <Ship className="w-4 h-4 text-[#0d62e8] shrink-0" />
+                    <h2 className="font-bold text-[#072456] truncate">
                       {trip.vesselName} ({trip.vesselRegNumber})
                     </h2>
                   </div>
-                  <p className="text-xs text-slate-600 mt-0.5">
-                    <span className="font-mono font-semibold">{trip.tripNumber}</span>
+                  <p className="text-xs text-[#4b6891] mt-0.5">
+                    <span className="font-mono font-semibold text-[#0b4ea8]">{trip.tripNumber}</span>
                     {trip.orderNumber ? ` · GP ${trip.orderNumber}` : ''}
                   </p>
                 </div>
                 <span
-                  className={`px-2 py-0.5 rounded border text-[11px] font-semibold shrink-0 ${st.badgeBg} ${st.badgeText} ${st.badgeBorder}`}
+                  className={`px-2.5 py-0.5 rounded-lg border text-[11px] font-bold shrink-0 ${st.badgeBg} ${st.badgeText} ${st.badgeBorder}`}
                 >
                   {st.label}
                 </span>
@@ -471,7 +702,7 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
                   {trip.actualDepartureTime && (
                     <>
                       {' '}· XB thực tế:{' '}
-                      <strong className="font-mono tabular-nums text-sky-800">
+                      <strong className="font-mono tabular-nums text-[#0b50b8]">
                         {formatTime(trip.actualDepartureTime)}
                       </strong>
                     </>
@@ -491,7 +722,7 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
               {renderTripAlerts(trip)}
 
               {activeStop && (
-                <p className="text-xs text-red-800 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1.5">
+                <p className="text-xs text-red-800 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
                   <strong>{getBpStopReasonLabel(activeStop.maLyDo)}:</strong> {activeStop.moTa}
                 </p>
               )}
@@ -501,11 +732,11 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
           );
         })}
         {filteredTrips.length === 0 && (
-          <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+          <div className="rounded-2xl border border-[#dce8f8] bg-white p-8 text-center text-sm text-[#526c93]">
             Không tìm thấy chuyến tàu phù hợp bộ lọc.
           </div>
         )}
-        <div className="rounded-xl overflow-hidden border border-slate-200 bg-white empty:hidden">
+        <div className="rounded-2xl overflow-hidden border border-[#dce8f8] bg-white empty:hidden">
           <PaginationBar
             currentPage={pagination.currentPage}
             totalPages={pagination.totalPages}
@@ -521,19 +752,19 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
       </div>
 
       {/* Desktop Table (>= lg) */}
-      <div className="hidden lg:block bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+      <div className="hidden lg:block bg-white/95 rounded-2xl border border-[#dce8f8] overflow-hidden shadow-[0_10px_28px_-14px_rgba(11,78,168,0.16)]">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase tracking-wide text-slate-600">
+            <thead className="bg-[#eef5fe] border-b border-[#dce8f8] text-xs uppercase tracking-wide text-[#1f4882]">
               <tr>
-                <th className="px-4 py-3 font-semibold">Tàu / Mã hồ sơ</th>
-                <th className="px-4 py-3 font-semibold">Chiều đi & Giờ DK</th>
-                <th className="px-4 py-3 font-semibold">Quân số / Sức chở</th>
-                <th className="px-4 py-3 font-semibold">Trạng thái & Cảnh báo</th>
-                <th className="px-4 py-3 font-semibold text-right">Kiểm soát cuối cùng</th>
+                <th className="px-4 py-3.5 font-extrabold">Tàu / Mã hồ sơ</th>
+                <th className="px-4 py-3.5 font-extrabold">Chiều đi & Giờ DK</th>
+                <th className="px-4 py-3.5 font-extrabold">Quân số / Sức chở</th>
+                <th className="px-4 py-3.5 font-extrabold">Trạng thái & Cảnh báo</th>
+                <th className="px-4 py-3.5 font-extrabold text-right">Kiểm soát cuối cùng</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-200">
+            <tbody className="divide-y divide-[#e8f0fb]">
               {pagination.pageItems.map((trip) => {
                 const st = getStatusInfo(trip.status);
                 const vessel = vessels.find((v) => v.id === trip.vesselId);
@@ -546,37 +777,40 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
                     key={trip.id}
                     className={
                       activeStop
-                        ? 'bg-red-50/40'
+                        ? 'bg-red-50/40 hover:bg-red-50/60 transition'
                         : normalizeStatus(trip.status) === 'DA_CAP_PHEP'
-                        ? 'bg-emerald-50/25'
-                        : 'hover:bg-slate-50/80'
+                        ? 'bg-emerald-50/25 hover:bg-emerald-50/50 transition'
+                        : 'hover:bg-[#f5f9ff] transition'
                     }
                   >
-                    <td className="px-4 py-3 align-top">
-                      <p className="font-bold text-slate-900">
-                        {trip.vesselName} <span className="text-xs font-normal text-slate-500">({trip.vesselRegNumber})</span>
+                    <td className="px-4 py-3.5 align-top">
+                      <p className="font-extrabold text-[#072456]">
+                        {trip.vesselName}{' '}
+                        <span className="text-xs font-semibold text-[#526c93]">
+                          ({trip.vesselRegNumber})
+                        </span>
                       </p>
-                      <p className="text-xs font-mono text-slate-600 mt-0.5">
+                      <p className="text-xs font-mono text-[#0b4ea8] font-semibold mt-0.5">
                         {trip.tripNumber}
                         {trip.orderNumber ? ` · GP ${trip.orderNumber}` : ''}
                       </p>
                     </td>
-                    <td className="px-4 py-3 align-top text-xs text-slate-700">
-                      <p className="font-medium">
+                    <td className="px-4 py-3.5 align-top text-xs text-slate-700">
+                      <p className="font-bold text-[#0c2b59]">
                         {trip.departurePortName} → {trip.arrivalPortName}
                       </p>
-                      <p className="font-mono tabular-nums text-slate-500 mt-0.5">
+                      <p className="font-mono tabular-nums text-[#526c93] mt-0.5">
                         Giờ DK: {formatTime(trip.scheduledDepartureTime)}
                       </p>
                       {trip.actualDepartureTime && (
-                        <p className="font-mono tabular-nums text-sky-800 font-semibold mt-0.5">
+                        <p className="font-mono tabular-nums text-[#0b50b8] font-bold mt-0.5">
                           XB thực tế: {formatTime(trip.actualDepartureTime)}
                         </p>
                       )}
                     </td>
-                    <td className="px-4 py-3 align-top font-mono tabular-nums text-xs text-slate-800">
-                      <p>{crewCount} thuyền viên</p>
-                      <p className="text-slate-600 mt-0.5">
+                    <td className="px-4 py-3.5 align-top font-mono tabular-nums text-xs text-[#0c2b59]">
+                      <p className="font-semibold">{crewCount} thuyền viên</p>
+                      <p className="text-[#526c93] mt-0.5">
                         {pax} / {vessel?.maxPassengers || '--'} hành khách
                       </p>
                       {typeof trip.bpDepartureControl?.actualTotalPeople === 'number' &&
@@ -586,15 +820,15 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
                           </p>
                         )}
                     </td>
-                    <td className="px-4 py-3 align-top space-y-1.5">
+                    <td className="px-4 py-3.5 align-top space-y-1.5">
                       <span
-                        className={`inline-block px-2 py-0.5 rounded border text-xs font-semibold ${st.badgeBg} ${st.badgeText} ${st.badgeBorder}`}
+                        className={`inline-block px-2.5 py-0.5 rounded-lg border text-xs font-bold ${st.badgeBg} ${st.badgeText} ${st.badgeBorder}`}
                       >
                         {st.label}
                       </span>
                       {renderTripAlerts(trip)}
                     </td>
-                    <td className="px-4 py-3 align-top">
+                    <td className="px-4 py-3.5 align-top">
                       <div className="flex justify-end">{renderActionButtons(trip)}</div>
                     </td>
                   </tr>
@@ -602,7 +836,7 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
               })}
               {filteredTrips.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={5} className="px-4 py-10 text-center text-[#526c93]">
                     Không có chuyến nào phù hợp bộ lọc hiện tại.
                   </td>
                 </tr>

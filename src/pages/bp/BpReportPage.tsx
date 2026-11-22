@@ -16,6 +16,7 @@ import {
   getLocalIsoDate,
   roundMetric1,
 } from '../../utils/formatters';
+import { BpHeroBanner } from '../../components/bp/BpHeroBanner';
 import { PaginationBar, usePagination } from '../../components/PaginationBar';
 
 interface BpReportPageProps {
@@ -220,27 +221,23 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
-            {bpConfig.unitDisplayName} · Chỉ huy Đồn (Thống kê nghiệp vụ)
-          </p>
-          <h1 className="text-lg sm:text-xl font-bold text-slate-900">
-            Báo cáo công tác kiểm soát xuất bến & cập bến
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Thống kê tác nghiệp Biên phòng (không áp dụng chấm điểm KPI cá nhân).
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={handleExportExcel}
-          className="min-h-[44px] px-4 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-bold flex items-center justify-center gap-2 shrink-0 cursor-pointer"
-        >
-          <Download className="w-4 h-4" />
-          <span>Xuất Excel báo cáo</span>
-        </button>
-      </div>
+      <BpHeroBanner
+        kicker={`${bpConfig.unitDisplayName} - CHỈ HUY ĐỒN (THỐNG KÊ NGHIỆP VỤ)`}
+        title="Báo cáo công tác kiểm soát xuất bến & cập bến"
+        subtitleNode={
+          <span>Thống kê tác nghiệp Biên phòng (không áp dụng chấm điểm KPI cá nhân).</span>
+        }
+        rightAction={
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-b from-[#16a34a] to-[#0f7a38] hover:from-[#1cb354] hover:to-[#0c682f] text-white text-sm font-bold flex items-center justify-center gap-2 shrink-0 cursor-pointer shadow-[0_8px_18px_-6px_rgba(15,122,56,0.55)] border border-white/30 whitespace-nowrap transition"
+          >
+            <Download className="w-4 h-4" />
+            <span>Xuất Excel báo cáo</span>
+          </button>
+        }
+      />
 
       {/* Filters */}
       <div className="bg-white rounded-xl border border-slate-200 p-3.5 grid grid-cols-1 sm:grid-cols-3 gap-3">

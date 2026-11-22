@@ -12,6 +12,7 @@ import {
   subscribeCurrentUserProfile,
   signOutGmail,
 } from './services/firebaseAuthService';
+import { firestoreSyncService } from './services/firestoreSyncService';
 import {
   LogoutTriggerReason,
   SESSION_EXPIRED_MESSAGE,
@@ -84,6 +85,7 @@ export default function App() {
   useEffect(() => {
     return repository.subscribe(() => {
       setDataVersion((v) => v + 1);
+      setWeather(repository.getWeather());
     });
   }, []);
 
@@ -135,6 +137,9 @@ export default function App() {
 
       if (profile.role !== 'UNASSIGNED' && profile.status !== 'LOCKED') {
         repository.setCurrentUser(profile);
+        if (auth.currentUser) {
+          firestoreSyncService.start(auth.currentUser, profile);
+        }
         // Cán bộ Biên phòng đăng nhập thành công bằng email = tự động đăng ca trực
         if (profile.role === 'BP_TRUC' || profile.role === 'BP_CHIHUY') {
           repository.ensureBpLoginDutyShift(profile);
@@ -150,6 +155,7 @@ export default function App() {
           );
         }
       } else {
+        firestoreSyncService.stop();
         repository.setCurrentUser(null);
         setCurrentPage((prev) => (prev === 'login' ? 'unassigned' : prev));
       }
@@ -166,6 +172,7 @@ export default function App() {
       if (!isMounted) return;
 
       if (!fbUser) {
+        firestoreSyncService.stop();
         sessionManager.stopMonitoring();
         repository.setUserMutationListener(null);
         setFirebaseUser(null);
@@ -268,6 +275,7 @@ export default function App() {
 
     return () => {
       isMounted = false;
+      firestoreSyncService.stop();
       unsubscribeAuth();
       if (unsubscribeProfile) {
         unsubscribeProfile();

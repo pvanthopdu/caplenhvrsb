@@ -585,7 +585,7 @@ export const DEFAULT_ORDER_SIGNER_AUTHORITY = 'KT. GIÁM ĐỐC';
 export const DEFAULT_ORDER_SIGNER_TITLE = 'PHÓ GIÁM ĐỐC';
 export const DEFAULT_ORDER_SIGN_LOCATION = 'Quảng Ngãi';
 
-export const DEFAULT_ADMIN_CONTACT_EMAIL = 'pvtho@pdu.edu.vn, pvantho@gmail.com';
+export const DEFAULT_ADMIN_CONTACT_EMAIL = 'hanh.atgt@gmail.com, pvantho@gmail.com';
 export const DEFAULT_ADMIN_CONTACT_NAME = 'Phòng An toàn giao thông — Sở Xây dựng tỉnh Quảng Ngãi';
 export const DEFAULT_ADMIN_CONTACT_PHONE = '0914 000 001';
 
@@ -675,6 +675,18 @@ export const DEFAULT_OPERATIONAL_ACCOUNTS: UserAccount[] = [
     role: 'ADMIN',
     email: 'pvantho@gmail.com',
     phone: '0914000001',
+    department: 'Quản trị hệ thống • Sở Xây dựng Quảng Ngãi',
+    status: 'ACTIVE',
+    isActive: true,
+  },
+  {
+    id: 'USR-01B',
+    username: 'hanh.atgt',
+    password: '123456',
+    fullName: 'Nguyễn Thị Mỹ Hạnh (Quản trị)',
+    role: 'ADMIN',
+    email: 'hanh.atgt@gmail.com',
+    phone: '0914000003',
     department: 'Quản trị hệ thống • Sở Xây dựng Quảng Ngãi',
     status: 'ACTIVE',
     isActive: true,

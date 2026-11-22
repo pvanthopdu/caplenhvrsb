@@ -111,6 +111,7 @@ export const TripDetailPage: React.FC<TripDetailPageProps> = ({
   const [paxReason, setPaxReason] = useState('');
 
   const [showLiftBpModal, setShowLiftBpModal] = useState(false);
+  const [deleteDraftModalOpen, setDeleteDraftModalOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(
     null
   );
@@ -395,6 +396,17 @@ export const TripDetailPage: React.FC<TripDetailPageProps> = ({
               >
                 <Printer className="w-4 h-4" />
                 <span>{isPermitIssuedOrLater ? 'Xem Giấy phép A4 & QR' : 'Xem dự thảo A4'}</span>
+              </button>
+            )}
+
+            {st === 'NHAP' && repository.canDeleteDraftTrip(trip, currentUser) && (
+              <button
+                type="button"
+                onClick={() => setDeleteDraftModalOpen(true)}
+                className="px-4 py-2 text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 border border-rose-400/50 rounded-full transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Xóa hồ sơ nháp</span>
               </button>
             )}
 
@@ -1958,6 +1970,68 @@ export const TripDetailPage: React.FC<TripDetailPageProps> = ({
             });
           }}
         />
+      )}
+
+      {deleteDraftModalOpen && (
+        <div
+          onClick={() => setDeleteDraftModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/65 backdrop-blur-xs"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-black text-base text-slate-900">Xác nhận xóa hồ sơ nháp</h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Bạn có chắc chắn muốn xóa vĩnh viễn hồ sơ nháp{' '}
+                  <strong className="text-slate-900">{trip.tripNumber}</strong> của tàu{' '}
+                  <strong className="text-slate-900">{trip.vesselName}</strong>? Thao tác này không thể hoàn tác.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeleteDraftModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = repository.deleteDraftTrip(trip.id, currentUser);
+                  setDeleteDraftModalOpen(false);
+                  if (res.success) {
+                    try {
+                      sessionStorage.setItem(
+                        'vrsb_workflow_completed_msg',
+                        `Đã xóa hồ sơ nháp ${trip.tripNumber} (${trip.vesselName}).`
+                      );
+                    } catch {
+                      // ignore
+                    }
+                    onNavigate('trips');
+                  } else {
+                    setActionNotice({
+                      type: 'error',
+                      text: res.error || 'Không thể xóa hồ sơ nháp.',
+                    });
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 transition cursor-pointer shadow-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Xóa hồ sơ nháp</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -37,6 +37,7 @@ import {
   ArrowRight,
   Zap,
   AlertTriangle,
+  Trash2,
 } from 'lucide-react';
 import { TripTimelineTree } from '../components/TripTimelineTree';
 import { CoastalPageHero } from '../components/CoastalPageHero';
@@ -87,6 +88,36 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [selectedPort, setSelectedPort] = useState('ALL');
   const [timelineTripId, setTimelineTripId] = useState<string | null>(null);
+  const [draftToDelete, setDraftToDelete] = useState<TripRecord | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(() => {
+    try {
+      const msg = sessionStorage.getItem('vrsb_workflow_completed_msg');
+      if (msg) {
+        sessionStorage.removeItem('vrsb_workflow_completed_msg');
+        return { type: 'success', text: msg };
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  const handleConfirmDeleteDraft = () => {
+    if (!draftToDelete) return;
+    const res = repository.deleteDraftTrip(draftToDelete.id, currentUser);
+    if (res.success) {
+      setToastMsg({
+        type: 'success',
+        text: `Đã xóa hồ sơ nháp ${draftToDelete.tripNumber} (${draftToDelete.vesselName}).`,
+      });
+    } else {
+      setToastMsg({
+        type: 'error',
+        text: res.error || 'Không thể xóa hồ sơ nháp.',
+      });
+    }
+    setDraftToDelete(null);
+  };
 
   // Reset bộ lọc trạng thái và tàu khi chuyển đổi tài khoản khác vai trò
   useEffect(() => {
@@ -221,6 +252,25 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
           </>
         }
       />
+
+      {toastMsg && (
+        <div
+          className={`p-3.5 rounded-2xl border text-xs font-bold flex items-center justify-between ${
+            toastMsg.type === 'error'
+              ? 'bg-red-50 border-red-300 text-red-900'
+              : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+          }`}
+        >
+          <span>{toastMsg.text}</span>
+          <button
+            type="button"
+            onClick={() => setToastMsg(null)}
+            className="px-2 font-black cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* BỘ LỌC NHANH THEO NHIỆM VỤ TÀI KHOẢN & BỘ LỌC ĐA TIÊU CHÍ */}
       <div className="bg-white/95 p-4 sm:p-5 rounded-[24px] border border-[#dce8f7] shadow-[0_12px_32px_-12px_rgba(10,60,130,0.12)] space-y-3.5">
@@ -456,23 +506,38 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                         Người xử lý: <strong className="text-indigo-900">{handler.handlerName}</strong> ({handler.unitLabel})
                       </div>
                     </div>
-                    {isMyTask && s.actionLabel && s.actionPage ? (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onNavigate(s.actionPage!, trip.id);
-                        }}
-                        className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-full bg-[#0d62e8] hover:bg-[#0b53c6] text-white text-xs font-extrabold cursor-pointer shadow-xs"
-                      >
-                        <span>{s.actionLabel}</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    ) : (
-                      <span className="text-[#0d62e8] font-extrabold flex items-center gap-1">
-                        Xem chi tiết →
-                      </span>
-                    )}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {st === 'NHAP' && repository.canDeleteDraftTrip(trip, currentUser) && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDraftToDelete(trip);
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-extrabold cursor-pointer transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Xóa nháp</span>
+                        </button>
+                      )}
+                      {isMyTask && s.actionLabel && s.actionPage ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onNavigate(s.actionPage!, trip.id);
+                          }}
+                          className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-full bg-[#0d62e8] hover:bg-[#0b53c6] text-white text-xs font-extrabold cursor-pointer shadow-xs"
+                        >
+                          <span>{s.actionLabel}</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      ) : (
+                        <span className="text-[#0d62e8] font-extrabold flex items-center gap-1">
+                          Xem chi tiết →
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -672,6 +737,21 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                           >
                             <Eye className="w-5 h-5" />
                           </button>
+                          {st === 'NHAP' && repository.canDeleteDraftTrip(trip, currentUser) && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDraftToDelete(trip);
+                              }}
+                              title="Xóa hồ sơ nháp"
+                              aria-label="Xóa hồ sơ nháp"
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition cursor-pointer whitespace-nowrap"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              <span>Xóa</span>
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -744,6 +824,50 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                 className="px-5 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL XÁC NHẬN XÓA HỒ SƠ NHÁP */}
+      {draftToDelete && (
+        <div
+          onClick={() => setDraftToDelete(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/65 backdrop-blur-xs"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-black text-base text-slate-900">Xác nhận xóa hồ sơ nháp</h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Bạn có chắc chắn muốn xóa vĩnh viễn hồ sơ nháp{' '}
+                  <strong className="text-slate-900">{draftToDelete.tripNumber}</strong> của tàu{' '}
+                  <strong className="text-slate-900">{draftToDelete.vesselName}</strong>? Thao tác này không thể hoàn tác.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDraftToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteDraft}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 transition cursor-pointer shadow-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Xóa hồ sơ nháp</span>
               </button>
             </div>
           </div>

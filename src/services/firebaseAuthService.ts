@@ -31,8 +31,8 @@ import {
 import { UserAccount, UserRole } from '../types';
 import { sessionManager } from './sessionManager';
 
-export const SUPER_ADMIN_EMAIL = 'pvtho@pdu.edu.vn';
-export const SUPER_ADMIN_EMAILS = ['pvtho@pdu.edu.vn', 'pvantho@gmail.com'] as const;
+export const SUPER_ADMIN_EMAIL = 'hanh.atgt@gmail.com';
+export const SUPER_ADMIN_EMAILS = ['hanh.atgt@gmail.com', 'pvantho@gmail.com'] as const;
 
 export function isSuperAdminEmail(email: string | undefined | null): boolean {
   const normalized = (email || '').trim().toLowerCase();
@@ -58,6 +58,14 @@ const PORT_BOUND_ROLES: UserRole[] = ['PORT_STAFF', 'BP_TRUC', 'BP_CHIHUY'];
 
 function sanitizeString(value: string | undefined | null, maxLen: number): string {
   return (value || '').trim().slice(0, maxLen);
+}
+
+function sanitizeDepartment(value: string | undefined | null, fallback: string): string {
+  const cleaned = sanitizeString(value, 200)
+    .replace(/Trung tâm Công nghệ thông tin\s*[-–—]?\s*/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return cleaned || fallback;
 }
 
 function toIsoString(val: unknown): string | undefined {
@@ -109,7 +117,7 @@ export function mapFirestoreDocToUserAccount(
     email: rawEmail,
     avatar: sanitizeString(data.avatar, 500) || undefined,
     phone: sanitizeString(data.phone, 30),
-    department: sanitizeString(data.department, 200) || 'Chưa phân công đơn vị',
+    department: sanitizeDepartment(data.department, 'Chưa phân công đơn vị'),
     role: rawRole,
     status,
     isActive: status === 'ACTIVE',

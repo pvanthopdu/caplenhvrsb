@@ -87,7 +87,7 @@ const VESSEL_CATALOG_VERSION = 'vrsb_vessels_lyson_11_2026_11';
 const CAPTAIN_CATALOG_VERSION = 'vrsb_captains_official_11_2026_11_v2';
 const TRIPS_CLEANUP_VERSION = 'vrsb_4_canonical_trips_clean_2026_11_v1';
 
-const STORAGE_KEYS = {
+export const REPOSITORY_STORAGE_KEYS = {
   DATA_VERSION: 'vrsb_data_version',
   VESSEL_CATALOG_VERSION: 'vrsb_vessel_catalog_version',
   CAPTAIN_CATALOG_VERSION: 'vrsb_captain_catalog_version',
@@ -117,7 +117,9 @@ const STORAGE_KEYS = {
   BP_DE_NGHI_DUNG: 'vrsb_bp_de_nghi_dung',
   BP_KIEM_SOAT: 'vrsb_bp_kiem_soat',
   BP_ACCESS_LOGS: 'vrsb_bp_access_logs',
-};
+} as const;
+
+const STORAGE_KEYS = REPOSITORY_STORAGE_KEYS;
 
 const BP_DEMO_SESSION_KEY = 'vrsb_bp_demo_session_v1';
 
@@ -151,10 +153,27 @@ class Repository {
   private memoryCache: Record<string, any> = {};
   private listeners: Array<() => void> = [];
   private userMutationListener: (() => void) | null = null;
+  private storageWriteHook: ((storageKey: string) => void) | null = null;
+  private isApplyingRemote = false;
   private lastStorageWarning: string | null = null;
 
   constructor() {
     this.initializeStorage();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', (event) => {
+        if (!event.key || !event.key.startsWith('vrsb_')) return;
+        if (event.newValue) {
+          try {
+            this.memoryCache[event.key] = JSON.parse(event.newValue);
+          } catch {
+            // ignore malformed JSON
+          }
+        } else {
+          delete this.memoryCache[event.key];
+        }
+        this.notifyListeners();
+      });
+    }
   }
 
   public getLastStorageWarning(): string | null {
@@ -163,6 +182,41 @@ class Repository {
 
   public setUserMutationListener(listener: (() => void) | null): void {
     this.userMutationListener = listener;
+  }
+
+  public setStorageWriteHook(hook: ((storageKey: string) => void) | null): void {
+    this.storageWriteHook = hook;
+  }
+
+  public getSyncedStorageValue(key: string): unknown {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw !== null) {
+        return JSON.parse(raw);
+      }
+    } catch {
+      // fall back to memoryCache
+    }
+    return this.memoryCache[key];
+  }
+
+  public applyRemoteKeyValues(entries: Record<string, unknown>): void {
+    this.isApplyingRemote = true;
+    try {
+      for (const [key, value] of Object.entries(entries)) {
+        if (value === undefined) continue;
+        this.memoryCache[key] = value;
+        try {
+          localStorage.setItem(key, JSON.stringify(value));
+          this.lastStorageWarning = null;
+        } catch (e: any) {
+          console.warn(`LocalStorage remote sync write error for ${key}:`, e);
+        }
+      }
+    } finally {
+      this.isApplyingRemote = false;
+    }
+    this.notifyListeners();
   }
 
   private emitUserMutation(): void {
@@ -216,6 +270,13 @@ class Repository {
       if (e?.name === 'QuotaExceededError' || String(e?.message || '').toLowerCase().includes('quota')) {
         this.lastStorageWarning =
           'Bộ nhớ cục bộ trình duyệt (LocalStorage ~5MB) đã đầy. Dữ liệu mới tạm giữ trong RAM; vui lòng sao lưu JSON và dọn bớt dữ liệu cũ.';
+      }
+    }
+    if (!this.isApplyingRemote && this.storageWriteHook) {
+      try {
+        this.storageWriteHook(key);
+      } catch (err) {
+        console.warn(`Cloud sync hook error for ${key}:`, err);
       }
     }
     this.notifyListeners();
@@ -574,6 +635,15 @@ class Repository {
   }
 
   // =================== USERS & AUTH ===================
+  private sanitizeDepartmentName(department?: string): string {
+    if (!department) return '';
+    const cleaned = department
+      .replace(/Trung tâm Công nghệ thông tin\s*[-–—]?\s*/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    return cleaned || 'Sở Xây dựng';
+  }
+
   public getAllUsers(): UserAccount[] {
     const rawUsers = this.getItem<UserAccount[]>(STORAGE_KEYS.USERS_LIST, [
       ...DEFAULT_OPERATIONAL_ACCOUNTS,
@@ -583,17 +653,28 @@ class Repository {
     const seedAccounts = [...DEFAULT_OPERATIONAL_ACCOUNTS, ...DEFAULT_BP_ACCOUNTS];
     const missing = seedAccounts.filter((mu) => !existingIds.has(mu.id));
     const mergedUsers = missing.length > 0 ? [...rawUsers, ...missing] : rawUsers;
-    if (missing.length > 0) {
-      this.setItem(STORAGE_KEYS.USERS_LIST, mergedUsers);
+    let needsSave = missing.length > 0;
+
+    const normalizedUsers = mergedUsers.map((u) => {
+      const sanitizedDept = u.department ? this.sanitizeDepartmentName(u.department) : u.department;
+      if (sanitizedDept !== u.department) {
+        needsSave = true;
+      }
+      return {
+        ...u,
+        department: sanitizedDept,
+        assignedPortId: u.assignedPortId || getUserAssignedPortId(u),
+        status: u.status || 'ACTIVE',
+        isActive: u.isActive !== undefined ? u.isActive : u.status !== 'LOCKED',
+        createdAt: u.createdAt || '2026-10-01T08:00:00+07:00',
+      };
+    });
+
+    if (needsSave) {
+      this.setItem(STORAGE_KEYS.USERS_LIST, normalizedUsers);
     }
 
-    return mergedUsers.map((u) => ({
-      ...u,
-      assignedPortId: u.assignedPortId || getUserAssignedPortId(u),
-      status: u.status || 'ACTIVE',
-      isActive: u.isActive !== undefined ? u.isActive : u.status !== 'LOCKED',
-      createdAt: u.createdAt || '2026-10-01T08:00:00+07:00',
-    }));
+    return normalizedUsers;
   }
 
   public getUserById(id: string): UserAccount | undefined {
@@ -607,12 +688,14 @@ class Repository {
     if (!latest) {
       return {
         ...raw,
+        department: raw.department ? this.sanitizeDepartmentName(raw.department) : raw.department,
         assignedPortId: raw.assignedPortId || getUserAssignedPortId(raw),
       };
     }
     return {
       ...raw,
       ...latest,
+      department: this.sanitizeDepartmentName(latest.department || raw.department),
       assignedPortId: latest.assignedPortId || raw.assignedPortId || getUserAssignedPortId(latest),
     };
   }
@@ -702,8 +785,9 @@ class Repository {
       if (idx >= 0) users[idx] = matchedUser;
       this.setItem(STORAGE_KEYS.USERS_LIST, users);
     } else {
-      const newRole: UserRole =
-        cleanEmail === 'pvantho@gmail.com' ? 'ADMIN' : googleProfile.role || 'CAPTAIN';
+      const isBootstrapSuperAdmin =
+        cleanEmail === 'pvantho@gmail.com' || cleanEmail === 'hanh.atgt@gmail.com';
+      const newRole: UserRole = isBootstrapSuperAdmin ? 'ADMIN' : googleProfile.role || 'CAPTAIN';
       let defaultDept = 'Tài khoản Google liên kết';
       if (newRole === 'CAPTAIN') defaultDept = 'Hợp tác xã Vận tải Thủy bộ Lý Sơn';
       else if (newRole === 'OFFICER' || newRole === 'DEPT_HEAD') defaultDept = 'Phòng An toàn giao thông - Sở Xây dựng';
@@ -712,7 +796,12 @@ class Repository {
       else if (newRole === 'ADMIN') defaultDept = 'Quản trị hệ thống - Sở Xây dựng Quảng Ngãi';
 
       loggedInUser = {
-        id: cleanEmail === 'pvantho@gmail.com' ? 'USR-ADMIN-PVANTHO' : `USR-GOOGLE-${Date.now().toString().slice(-4)}`,
+        id:
+          cleanEmail === 'pvantho@gmail.com'
+            ? 'USR-ADMIN-PVANTHO'
+            : cleanEmail === 'hanh.atgt@gmail.com'
+            ? 'USR-ADMIN-HANH'
+            : `USR-GOOGLE-${Date.now().toString().slice(-4)}`,
         username: cleanEmail.split('@')[0],
         fullName: googleProfile.fullName,
         email: cleanEmail,
@@ -1018,10 +1107,11 @@ class Repository {
       typeof saved.permitSignLocation === 'string' && saved.permitSignLocation.trim()
         ? saved.permitSignLocation.trim()
         : DEFAULT_ORDER_SIGN_LOCATION;
-    const adminContactEmail =
+    const rawAdminContactEmail =
       typeof saved.adminContactEmail === 'string' && saved.adminContactEmail.trim()
         ? saved.adminContactEmail.trim()
         : DEFAULT_ADMIN_CONTACT_EMAIL;
+    const adminContactEmail = rawAdminContactEmail.replace(/pvtho@pdu\.edu\.vn/gi, 'hanh.atgt@gmail.com');
     const adminContactName =
       typeof saved.adminContactName === 'string' && saved.adminContactName.trim()
         ? saved.adminContactName.trim()
@@ -1997,6 +2087,56 @@ class Repository {
     }
     this.emitUserMutation();
     return true;
+  }
+
+  public canDeleteDraftTrip(trip: TripRecord, actor: UserAccount): boolean {
+    if (!trip || !actor) return false;
+    if (normalizeStatus(trip.status) !== 'NHAP') return false;
+    if (actor.role === 'ADMIN' || actor.role === 'PORT_STAFF') return true;
+    if (trip.createdById === actor.id) return true;
+    if (actor.role === 'CAPTAIN') {
+      const accessibleVesselIds = getUserAccessibleVesselIds(
+        actor,
+        this.getVessels(),
+        this.getCrew()
+      );
+      return accessibleVesselIds.includes(trip.vesselId);
+    }
+    return false;
+  }
+
+  public deleteDraftTrip(
+    id: string,
+    actor: UserAccount
+  ): { success: boolean; error?: string } {
+    const trip = this.getTripById(id);
+    if (!trip) {
+      return { success: false, error: 'Không tìm thấy hồ sơ nháp cần xóa.' };
+    }
+    if (normalizeStatus(trip.status) !== 'NHAP') {
+      return {
+        success: false,
+        error: 'Chỉ cho phép xóa các hồ sơ đang ở trạng thái Nháp (NHAP).',
+      };
+    }
+    if (!this.canDeleteDraftTrip(trip, actor)) {
+      return {
+        success: false,
+        error: 'Tài khoản không có quyền xóa hồ sơ nháp này.',
+      };
+    }
+
+    this.deleteTrip(id);
+    this.addAuditLog({
+      userId: actor.id,
+      userName: actor.fullName,
+      userRole: actor.role,
+      action: 'XÓA_HỒ_SƠ_NHÁP',
+      targetId: trip.id,
+      targetType: 'TRIP',
+      details: `Đã xóa hồ sơ nháp ${trip.tripNumber} (tàu ${trip.vesselName} - ${trip.vesselRegNumber}).`,
+    });
+    return { success: true };
   }
 
   public generateNextOrderNumber(routeCode: string): string {

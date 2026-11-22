@@ -29,6 +29,7 @@ import {
   roundOverdueMinutes,
 } from '../../utils/formatters';
 import { getUserAssignedPortId, normalizeStatus } from '../../utils/userPermissions';
+import { BpHeroBanner } from '../../components/bp/BpHeroBanner';
 import { BpDossierReadOnlyModal } from '../../components/bp/BpDossierReadOnlyModal';
 import { PaginationBar, usePagination } from '../../components/PaginationBar';
 
@@ -294,34 +295,31 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
-            {bpConfig.unitDisplayName} · Giám sát hành trình & Đón tàu cập bến
-          </p>
-          <h1 className="text-lg sm:text-xl font-bold text-slate-900">
-            Theo dõi tàu đang chạy trên biển (ĐÃ XUẤT BẾN)
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Thời gian chuẩn: <strong className="font-mono">{bpConfig.standardTransitMinutesOutbound}</strong> phút (Đảo Lớn → Đảo Bé) /{' '}
-            <strong className="font-mono">{bpConfig.standardTransitMinutesInbound}</strong> phút (chiều về) · Cảnh báo đỏ khi quá +
-            <strong className="font-mono">{bpConfig.overdueGraceMinutes}</strong> phút.
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setSoundEnabled((v) => !v)}
-          className={`min-h-[44px] px-4 py-2 rounded-lg border text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 shrink-0 cursor-pointer ${
-            soundEnabled
-              ? 'border-red-300 bg-red-50 text-red-800 hover:bg-red-100'
-              : 'border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100'
-          }`}
-        >
-          {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-          <span>{soundEnabled ? 'Còi cảnh báo: BẬT' : 'Còi cảnh báo: TẮT'}</span>
-        </button>
-      </div>
+      <BpHeroBanner
+        kicker={`${bpConfig.unitDisplayName} - GIÁM SÁT HÀNH TRÌNH & ĐÓN TÀU CẬP BẾN`}
+        title="Theo dõi tàu đang chạy trên biển (ĐÃ XUẤT BẾN)"
+        subtitleNode={
+          <span>
+            Thời gian chuẩn: <strong className="font-mono text-[#0b2e66]">{bpConfig.standardTransitMinutesOutbound}</strong> phút (Đảo Lớn → Đảo Bé) /{' '}
+            <strong className="font-mono text-[#0b2e66]">{bpConfig.standardTransitMinutesInbound}</strong> phút (chiều về) · Cảnh báo đỏ khi quá +
+            <strong className="font-mono text-[#0b2e66]">{bpConfig.overdueGraceMinutes}</strong> phút.
+          </span>
+        }
+        rightAction={
+          <button
+            type="button"
+            onClick={() => setSoundEnabled((v) => !v)}
+            className={`min-h-[44px] px-4 py-2.5 rounded-xl border text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shrink-0 cursor-pointer shadow-md whitespace-nowrap transition ${
+              soundEnabled
+                ? 'border-white/40 bg-red-600 hover:bg-red-700 text-white'
+                : 'border-white/50 bg-white/95 hover:bg-white text-slate-800'
+            }`}
+          >
+            {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            <span>{soundEnabled ? 'Còi cảnh báo: BẬT' : 'Còi cảnh báo: TẮT'}</span>
+          </button>
+        }
+      />
 
       {unacknowledgedOverdue.length > 0 && (
         <div className="rounded-xl border-2 border-red-500 bg-red-700 text-white p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">

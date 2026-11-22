@@ -29,7 +29,7 @@ service cloud.firestore {
 
     // Super Admins bootstrapped directly by verified Gmail identity
     function isBootstrapAdmin() {
-      return isSignedIn() && request.auth.token.email.lower() in ['pvtho@pdu.edu.vn', 'pvantho@gmail.com'];
+      return isSignedIn() && request.auth.token.email.lower() in ['hanh.atgt@gmail.com', 'pvantho@gmail.com'];
     }
 
     // Admin check (for single-document get/create/update/delete; never inside allow list)
@@ -39,6 +39,26 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN' &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'ACTIVE'
+      );
+    }
+
+    // Active assigned system user (blocks UNASSIGNED and LOCKED accounts from shared operational data)
+    function isActiveSystemUser() {
+      return isBootstrapAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'ACTIVE' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role != 'UNASSIGNED'
+      );
+    }
+
+    // Config bucket editors (ADMIN or BP_CHIHUY for Border Guard unit config)
+    function isConfigEditor() {
+      return isAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'ACTIVE' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'BP_CHIHUY'
       );
     }
 
@@ -56,6 +76,18 @@ service cloud.firestore {
         'VERIFIER',
         'BP_TRUC',
         'BP_CHIHUY'
+      ];
+    }
+
+    function isValidSharedBucketId(bucketId) {
+      return bucketId in [
+        'trips',
+        'catalog',
+        'operations',
+        'config',
+        'bp_records',
+        'kpi',
+        'audit_logs'
       ];
     }
 
@@ -139,6 +171,45 @@ service cloud.firestore {
         ));
     }
 
+    function isValidSharedStateBucket(data, bucketId) {
+      return data.keys().hasAll([
+          'bucketId',
+          'schemaVersion',
+          'revision',
+          'clientWriteId',
+          'updatedByUid',
+          'updatedByEmail',
+          'data',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'bucketId',
+          'schemaVersion',
+          'revision',
+          'clientWriteId',
+          'updatedByUid',
+          'updatedByEmail',
+          'data',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.bucketId is string
+        && data.bucketId == bucketId
+        && isValidSharedBucketId(data.bucketId)
+        && data.schemaVersion is int && data.schemaVersion >= 1 && data.schemaVersion <= 100
+        && data.revision is int && data.revision >= 1 && data.revision <= 1000000000
+        && data.clientWriteId is string && data.clientWriteId.size() >= 1 && data.clientWriteId.size() <= 128
+        && isValidId(data.updatedByUid)
+        && data.updatedByUid == request.auth.uid
+        && data.updatedByEmail is string && data.updatedByEmail.size() >= 3 && data.updatedByEmail.size() <= 200
+        && data.updatedByEmail == request.auth.token.email.lower()
+        && data.data is map
+        && data.data.keys().size() <= 16
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     function matchesPreAssignedInvite(data) {
       let inviteId = emailToInviteId(request.auth.token.email);
       let invitePath = /databases/$(database)/documents/gmail_invites/$(inviteId);
@@ -209,7 +280,7 @@ service cloud.firestore {
       allow delete: if isValidId(userId)
         && isAdmin()
         && userId != request.auth.uid
-        && !(existing().email.lower() in ['pvtho@pdu.edu.vn', 'pvantho@gmail.com']);
+        && !(existing().email.lower() in ['hanh.atgt@gmail.com', 'pvantho@gmail.com']);
     }
 
     match /gmail_invites/{inviteId} {
@@ -257,6 +328,56 @@ service cloud.firestore {
             exists(/databases/$(database)/documents/users/$(request.auth.uid))
           )
         );
+    }
+
+    match /shared_state/{bucketId} {
+      // No collection-wide list queries; clients attach directly to the 7 known bucket IDs
+      allow list: if false;
+
+      // Only verified, active, role-assigned system users can read shared operational buckets
+      allow get: if isValidId(bucketId)
+        && isValidSharedBucketId(bucketId)
+        && isActiveSystemUser();
+
+      // Seed initial bucket document (config bucket restricted to ADMIN / BP_CHIHUY)
+      allow create: if isValidId(bucketId)
+        && isSignedIn()
+        && isValidSharedStateBucket(incoming(), bucketId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (bucketId == 'config' && isConfigEditor()) ||
+          (bucketId != 'config' && isActiveSystemUser())
+        );
+
+      // Action-based update with strict key allowlist, immutable bucketId/createdAt, monotonic revision
+      allow update: if isValidId(bucketId)
+        && isSignedIn()
+        && isValidSharedStateBucket(incoming(), bucketId)
+        && incoming().bucketId == existing().bucketId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().revision >= existing().revision
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'schemaVersion',
+          'revision',
+          'clientWriteId',
+          'updatedByUid',
+          'updatedByEmail',
+          'data',
+          'updatedAt'
+        ])
+        && (
+          isAdmin() ||
+          (bucketId == 'config' && isConfigEditor()) ||
+          (bucketId != 'config' && isActiveSystemUser())
+        );
+
+      // Only admins may delete a shared state bucket (e.g. during full reset)
+      allow delete: if isValidId(bucketId)
+        && isValidSharedBucketId(bucketId)
+        && isAdmin();
     }
 
     match /test/{docId} {

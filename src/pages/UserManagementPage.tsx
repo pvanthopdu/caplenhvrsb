@@ -202,7 +202,7 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
       case 'UNASSIGNED':
         return 'Chưa phân công đơn vị';
       case 'ADMIN':
-        return 'Trung tâm Công nghệ thông tin - Sở Xây dựng';
+        return 'Sở Xây dựng';
       case 'LEADER':
         return 'Lãnh đạo Sở Xây dựng tỉnh Quảng Ngãi';
       case 'DEPT_HEAD':

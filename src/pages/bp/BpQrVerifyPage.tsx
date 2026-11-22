@@ -21,6 +21,7 @@ import { QrVerifyOutcomeCode, TripRecord, UserAccount } from '../../types';
 import { repository } from '../../services/repository';
 import { formatDateTime } from '../../utils/formatters';
 import { normalizeStatus } from '../../utils/userPermissions';
+import { BpHeroBanner } from '../../components/bp/BpHeroBanner';
 import { BpDossierReadOnlyModal } from '../../components/bp/BpDossierReadOnlyModal';
 import { BpLiftStopModal } from '../../components/bp/BpStopActionModals';
 import { BpDepartureControlModal } from '../../components/bp/BpDepartureControlModal';
@@ -156,18 +157,16 @@ export const BpQrVerifyPage: React.FC<BpQrVerifyPageProps> = ({ currentUser }) =
     : '';
 
   return (
-    <div className="max-w-3xl mx-auto space-y-4">
-      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-        <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">
-          {bpConfig.unitDisplayName} · Kiểm soát QR Giấy phép rời cảng
-        </p>
-        <h1 className="text-lg sm:text-xl font-bold text-slate-900">
-          Quét mã QR xác thực Giấy phép rời cảng
-        </h1>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Quét mã QR trên Giấy phép rời cảng hoặc nhập Số Giấy phép / Mã hồ sơ để kiểm tra: Hợp lệ, Hết hiệu lực, Tạm đình chỉ, Đã thu hồi, Đã xuất bến, Không tồn tại.
-        </p>
-      </div>
+    <div className="max-w-5xl mx-auto space-y-4">
+      <BpHeroBanner
+        kicker={`${bpConfig.unitDisplayName} - KIỂM SOÁT QR GIẤY PHÉP RỜI CẢNG`}
+        title="Quét mã QR xác thực Giấy phép rời cảng"
+        subtitleNode={
+          <span>
+            Quét mã QR trên Giấy phép rời cảng hoặc nhập Số Giấy phép / Mã hồ sơ để kiểm tra hiệu lực tức thời.
+          </span>
+        }
+      />
 
       {/* Camera Scanner + Manual Input */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4 shadow-xs">

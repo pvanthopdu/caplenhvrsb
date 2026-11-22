@@ -170,6 +170,12 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
   const [pendingCopyTrip, setPendingCopyTrip] = useState<TripRecord | null>(null);
   const [showWithdrawModal, setShowWithdrawModal] = useState<boolean>(false);
   const [withdrawReason, setWithdrawReason] = useState<string>('');
+  const [showDeleteDraftModal, setShowDeleteDraftModal] = useState<boolean>(false);
+  const canDeleteExistingDraft = Boolean(
+    existingTrip &&
+      canonicalExistingStatus === 'NHAP' &&
+      repository.canDeleteDraftTrip(existingTrip, currentUser)
+  );
 
   const showToast = (type: 'success' | 'error' | 'info', message: string) => {
     setToastBanner({ type, message });
@@ -2180,14 +2186,26 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
               {currentStep === 6 && 'Danh sách kết quả kiểm tra tàu, thuyền viên, hàng hóa & giấy tờ'}
             </span>
           </div>
-          <span className="sm:hidden text-xs font-bold text-[#0d62e8]">
-            {currentStep === 1 && 'Thông tin chung'}
-            {currentStep === 2 && 'Thuyền viên'}
-            {currentStep === 3 && 'Hành khách'}
-            {currentStep === 4 && 'Hàng hóa'}
-            {currentStep === 5 && 'Giấy tờ'}
-            {currentStep === 6 && 'Nộp hồ sơ'}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="sm:hidden text-xs font-bold text-[#0d62e8]">
+              {currentStep === 1 && 'Thông tin chung'}
+              {currentStep === 2 && 'Thuyền viên'}
+              {currentStep === 3 && 'Hành khách'}
+              {currentStep === 4 && 'Hàng hóa'}
+              {currentStep === 5 && 'Giấy tờ'}
+              {currentStep === 6 && 'Nộp hồ sơ'}
+            </span>
+            {canDeleteExistingDraft && existingTrip && (
+              <button
+                type="button"
+                onClick={() => setShowDeleteDraftModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-extrabold transition cursor-pointer whitespace-nowrap"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Xóa hồ sơ nháp</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Thanh Stepper 6 bước */}
@@ -5201,6 +5219,66 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL XÁC NHẬN XÓA HỒ SƠ NHÁP */}
+      {showDeleteDraftModal && existingTrip && (
+        <div
+          onClick={() => setShowDeleteDraftModal(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/65 backdrop-blur-xs"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-black text-base text-slate-900">Xác nhận xóa hồ sơ nháp</h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Bạn có chắc chắn muốn xóa vĩnh viễn hồ sơ nháp{' '}
+                  <strong className="text-slate-900">{existingTrip.tripNumber}</strong> của tàu{' '}
+                  <strong className="text-slate-900">{existingTrip.vesselName}</strong>? Thao tác này không thể hoàn tác.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowDeleteDraftModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 transition cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = repository.deleteDraftTrip(existingTrip.id, currentUser);
+                  setShowDeleteDraftModal(false);
+                  if (res.success) {
+                    try {
+                      sessionStorage.setItem(
+                        'vrsb_workflow_completed_msg',
+                        `Đã xóa hồ sơ nháp ${existingTrip.tripNumber} (${existingTrip.vesselName}).`
+                      );
+                    } catch {
+                      // ignore
+                    }
+                    onNavigate('trips');
+                  } else {
+                    showToast('error', res.error || 'Không thể xóa hồ sơ nháp.');
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 transition cursor-pointer shadow-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Xóa hồ sơ nháp</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

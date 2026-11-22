@@ -214,7 +214,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         {
           id: 'user-management',
-          label: 'Quản trị tài khoản & Bến',
+          label: 'Quản trị tài khoản',
           icon: UserCog,
           roles: ['ADMIN'],
         },

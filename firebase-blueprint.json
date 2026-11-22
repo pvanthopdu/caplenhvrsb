@@ -2,7 +2,7 @@
   "entities": {
     "UserAccountProfile": {
       "title": "UserAccountProfile",
-      "description": "Tài khoản người dùng đăng nhập qua Gmail và thông tin phân quyền bởi quản trị viên pvtho@pdu.edu.vn, pvantho@gmail.com",
+      "description": "Tài khoản người dùng đăng nhập qua Gmail và thông tin phân quyền bởi quản trị viên hanh.atgt@gmail.com, pvantho@gmail.com",
       "type": "object",
       "properties": {
         "uid": {
@@ -223,6 +223,77 @@
         "updatedAt"
       ]
     },
+    "SharedStateBucket": {
+      "title": "SharedStateBucket",
+      "description": "Nhóm dữ liệu vận hành dùng chung được đồng bộ thời gian thực trên Firestore giữa tất cả các tài khoản đã được phân quyền trên hệ thống VR-SB",
+      "type": "object",
+      "properties": {
+        "bucketId": {
+          "type": "string",
+          "description": "Mã nhóm dữ liệu đồng bộ cố định",
+          "enum": [
+            "trips",
+            "catalog",
+            "operations",
+            "config",
+            "bp_records",
+            "kpi",
+            "audit_logs"
+          ],
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "schemaVersion": {
+          "type": "integer",
+          "description": "Phiên bản cấu trúc dữ liệu của nhóm đồng bộ"
+        },
+        "revision": {
+          "type": "integer",
+          "description": "Số thứ tự phiên bản tăng dần sau mỗi lần cập nhật"
+        },
+        "clientWriteId": {
+          "type": "string",
+          "description": "Mã định danh lần ghi từ trình duyệt để tránh vòng lặp tự đồng bộ",
+          "maxLength": 128
+        },
+        "updatedByUid": {
+          "type": "string",
+          "description": "Firebase Auth UID của người dùng thực hiện cập nhật gần nhất",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedByEmail": {
+          "type": "string",
+          "description": "Email đã xác thực của người dùng thực hiện cập nhật gần nhất",
+          "maxLength": 200
+        },
+        "data": {
+          "type": "object",
+          "description": "Bản đồ dữ liệu nghiệp vụ gốc dạng Map/Array của nhóm đồng bộ"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Thời điểm khởi tạo tài liệu đồng bộ (serverTimestamp)"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Thời điểm cập nhật gần nhất (serverTimestamp)"
+        }
+      },
+      "required": [
+        "bucketId",
+        "schemaVersion",
+        "revision",
+        "clientWriteId",
+        "updatedByUid",
+        "updatedByEmail",
+        "data",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
     "ConnectionHealth": {
       "title": "ConnectionHealth",
       "description": "Tài liệu kiểm tra kết nối máy chủ Firestore khi khởi động",
@@ -240,13 +311,19 @@
       "schema": {
         "$ref": "#/entities/UserAccountProfile"
       },
-      "description": "Hồ sơ tài khoản Gmail và vai trò phân quyền RBAC do quản trị viên pvtho@pdu.edu.vn và pvantho@gmail.com quản lý"
+      "description": "Hồ sơ tài khoản Gmail và vai trò phân quyền RBAC do quản trị viên hanh.atgt@gmail.com và pvantho@gmail.com quản lý"
     },
     "/gmail_invites/{inviteId}": {
       "schema": {
         "$ref": "#/entities/GmailPreAssignment"
       },
       "description": "Danh sách Gmail được quản trị viên thêm và phân quyền trước; tự động kích hoạt thành hồ sơ users/{uid} ngay khi người dùng đăng nhập bằng Gmail lần đầu"
+    },
+    "/shared_state/{bucketId}": {
+      "schema": {
+        "$ref": "#/entities/SharedStateBucket"
+      },
+      "description": "7 nhóm dữ liệu vận hành dùng chung (trips, catalog, operations, config, bp_records, kpi, audit_logs) đồng bộ thời gian thực giữa tất cả các tài khoản hợp lệ"
     },
     "/test/{docId}": {
       "schema": {
