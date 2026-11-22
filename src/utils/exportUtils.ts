@@ -2,12 +2,22 @@ import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { TripRecord, Vessel } from '../types';
+import { repository } from '../services/repository';
 import { getStatusInfo, formatDate, formatTime } from './formatters';
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 /**
  * Xuất danh sách chuyến đi ra tệp Excel (.xlsx) bằng thư viện SheetJS
  */
 export function exportTripsToExcel(trips: TripRecord[], fileName = 'Danh_sach_cap_lenh_VRSB.xlsx'): void {
+  const defaultSignerName = repository.getPermitSignerConfig().name;
   const exportData = trips.map((t, idx) => ({
     STT: idx + 1,
     'Mã hồ sơ': t.tripNumber,
@@ -24,7 +34,10 @@ export function exportTripsToExcel(trips: TripRecord[], fileName = 'Danh_sach_ca
     'Hàng hóa (tấn)': t.cargoTons,
     'Thuyền trưởng': t.captainName,
     'Trạng thái': getStatusInfo(t.status).label,
-    'Người duyệt lệnh': t.approvedByName || '',
+    'Người duyệt lệnh':
+      t.approvedByName === 'Phạm Minh Đức' || t.approvedByName === 'Lãnh đạo Sở Xây dựng'
+        ? defaultSignerName
+        : t.approvedByName || (t.orderNumber ? defaultSignerName : ''),
     'Quá hạn xử lý': t.isOverallOverdue ? 'CÓ (Quá hạn)' : 'Không',
   }));
 
@@ -136,7 +149,17 @@ export function buildOrderWordDocument(
     : vessel?.grossTonnage
     ? `${vessel.grossTonnage}`
     : '';
-  const signerName = trip.approvedByName || 'Lãnh đạo Sở Xây dựng';
+  const signerCfg = repository.getPermitSignerConfig();
+  const signerName =
+    !trip.approvedByName ||
+    trip.approvedByName === 'Phạm Minh Đức' ||
+    trip.approvedByName === 'Lãnh đạo Sở Xây dựng'
+      ? signerCfg.name
+      : trip.approvedByName;
+  const signerAuthorityHtml = signerCfg.authority
+    ? `<p class="signer-role" style="margin-top: 2pt;">${escapeHtml(signerCfg.authority)}</p>
+        <p class="signer-role">${escapeHtml(signerCfg.title)}</p>`
+    : `<p class="signer-role" style="margin-top: 2pt;">${escapeHtml(signerCfg.title)}</p>`;
 
   const wordHtml = `
 <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
@@ -370,12 +393,11 @@ table {
         Only for inland waterway ships.
       </td>
       <td style="width: 56%; text-align: center;">
-        <p class="signer-date">Quảng Ngãi, ngày ${signDay} tháng ${signMonth} năm ${signYear}</p>
+        <p class="signer-date">${escapeHtml(signerCfg.location)}, ngày ${signDay} tháng ${signMonth} năm ${signYear}</p>
         <p class="signer-date">Date.....mm.....yy</p>
-        <p class="signer-role" style="margin-top: 2pt;">KT. GIÁM ĐỐC</p>
-        <p class="signer-role">PHÓ GIÁM ĐỐC</p>
+        ${signerAuthorityHtml}
         <div class="signature-blank"></div>
-        <p class="signer-name">${signerName}</p>
+        <p class="signer-name">${escapeHtml(signerName)}</p>
       </td>
     </tr>
   </table>

@@ -1025,7 +1025,13 @@ export const TripDetailPage: React.FC<TripDetailPageProps> = ({
                     )}
                     <p>
                       Phê duyệt &amp; Ký phát hành:{' '}
-                      <strong>{trip.approvedByName || 'Lãnh đạo Sở Xây dựng (Office)'}</strong>
+                      <strong>
+                        {!trip.approvedByName ||
+                        trip.approvedByName === 'Phạm Minh Đức' ||
+                        trip.approvedByName === 'Lãnh đạo Sở Xây dựng'
+                          ? repository.getPermitSignerConfig().name
+                          : trip.approvedByName}
+                      </strong>
                     </p>
                     {trip.issuedAt && (
                       <p>

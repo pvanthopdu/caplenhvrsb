@@ -38,7 +38,14 @@ import {
   FolderOpen,
   RefreshCw,
   Loader2,
+  FileSignature,
 } from 'lucide-react';
+import {
+  DEFAULT_ORDER_SIGNER_AUTHORITY,
+  DEFAULT_ORDER_SIGNER_NAME,
+  DEFAULT_ORDER_SIGNER_TITLE,
+  DEFAULT_ORDER_SIGN_LOCATION,
+} from '../config/systemDefaults';
 import { CoastalPageHero } from '../components/CoastalPageHero';
 import { PaginationBar, usePagination } from '../components/PaginationBar';
 import { dossierArchiveService, ServerDossiersOverview } from '../services/dossierArchiveService';
@@ -268,8 +275,22 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
       200,
       Math.max(5, Math.floor(Number(adminConfig.paginationPageSize) || 15))
     );
+    const permitSignerName =
+      (adminConfig.permitSignerName || '').trim() || DEFAULT_ORDER_SIGNER_NAME;
+    const permitSignerAuthority =
+      adminConfig.permitSignerAuthority !== undefined
+        ? adminConfig.permitSignerAuthority.trim()
+        : DEFAULT_ORDER_SIGNER_AUTHORITY;
+    const permitSignerTitle =
+      (adminConfig.permitSignerTitle || '').trim() || DEFAULT_ORDER_SIGNER_TITLE;
+    const permitSignLocation =
+      (adminConfig.permitSignLocation || '').trim() || DEFAULT_ORDER_SIGN_LOCATION;
     const normalized: AdminOperationalConfig = {
       ...adminConfig,
+      permitSignerName,
+      permitSignerAuthority,
+      permitSignerTitle,
+      permitSignLocation,
       bqlProcessingSlaMinutes: Math.max(5, Number(adminConfig.bqlProcessingSlaMinutes) || 60),
       deptProcessingSlaMinutes: Math.max(5, Number(adminConfig.deptProcessingSlaMinutes) || 60),
       officeUploadSlaMinutes: Math.max(1, Number(adminConfig.officeUploadSlaMinutes) || 10),
@@ -278,7 +299,12 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
     repository.saveAdminConfig(normalized, currentUser);
     setAdminConfig(normalized);
     setAdminConfigSavedMsg(
-      `Đã lưu cấu hình QR thanh toán, mẫu văn bản, định mức 60/60/10p, phân trang (${normalizedPageSize} bản ghi/trang) và checklist BQL 8 nhóm!`
+      `Đã lưu cấu hình vận hành! Người ký phát hành Giấy phép: ${permitSignerName} (${[
+        permitSignerAuthority,
+        permitSignerTitle,
+      ]
+        .filter(Boolean)
+        .join(' / ')}), phân trang ${normalizedPageSize} bản ghi/trang.`
     );
     setTimeout(() => setAdminConfigSavedMsg(''), 5000);
   };
@@ -343,7 +369,7 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
             }`}
           >
             <Settings className="w-4 h-4 text-blue-600" />
-            <span>QR thu phí, Mẫu &amp; Định mức</span>
+            <span>QR thu phí, Người ký &amp; Định mức</span>
           </button>
           <button
             onClick={() => setActiveTab('DEPLOYMENT_SYNC')}
@@ -408,7 +434,7 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                     Cấu hình vận hành nghiệp vụ (Mục 2, 3, 4 &amp; 8)
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    Quản trị mã QR nộp phí do Sở cung cấp, định mức 60/60/10 phút, mẫu Thông báo chấp thuận / dự thảo Giấy phép và danh mục kiểm tra 8 nhóm của BQL Cảng.
+                    Quản trị mã QR nộp phí do Sở cung cấp, người ký phát hành Giấy phép rời cảng, định mức 60/60/10 phút, mẫu Thông báo chấp thuận / dự thảo Giấy phép và danh mục kiểm tra 8 nhóm của BQL Cảng.
                   </p>
                 </div>
                 <button
@@ -511,10 +537,158 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                 </div>
               </div>
 
-              {/* 2. Định mức thời gian 60 / 60 / 10 & Tham số phân trang */}
+              {/* 2. Cấu hình Người ký phát hành Giấy phép rời cảng */}
+              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <FileSignature className="w-4 h-4 text-blue-700 shrink-0" />
+                    <h4 className="font-extrabold text-[#07244d] uppercase text-[11px]">
+                      2. Cấu hình Người ký phát hành Giấy phép rời cảng (A4, PDF, Word &amp; Office)
+                    </h4>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-semibold text-slate-500">Mẫu nhanh:</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdminConfig({
+                          ...adminConfig,
+                          permitSignerAuthority: 'KT. GIÁM ĐỐC',
+                          permitSignerTitle: 'PHÓ GIÁM ĐỐC',
+                        })
+                      }
+                      className="px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800 font-bold text-[10px] cursor-pointer transition"
+                    >
+                      Phó Giám đốc (KT. GIÁM ĐỐC)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdminConfig({
+                          ...adminConfig,
+                          permitSignerAuthority: '',
+                          permitSignerTitle: 'GIÁM ĐỐC',
+                        })
+                      }
+                      className="px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-[10px] cursor-pointer transition"
+                    >
+                      Giám đốc ký trực tiếp
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
+                  <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Họ và tên người ký (*)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder={DEFAULT_ORDER_SIGNER_NAME}
+                        value={adminConfig.permitSignerName ?? DEFAULT_ORDER_SIGNER_NAME}
+                        onChange={(e) =>
+                          setAdminConfig({ ...adminConfig, permitSignerName: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-blue-300 bg-blue-50/30 rounded-xl font-bold text-[#07244d]"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Tự động áp dụng làm người ký mặc định khi xuất dự thảo Word/PDF và phát hành Giấy phép.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Địa danh ký ban hành
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={DEFAULT_ORDER_SIGN_LOCATION}
+                        value={adminConfig.permitSignLocation ?? DEFAULT_ORDER_SIGN_LOCATION}
+                        onChange={(e) =>
+                          setAdminConfig({ ...adminConfig, permitSignLocation: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white font-semibold"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Hiển thị ở dòng ngày tháng ký (VD: Quảng Ngãi, ngày ... tháng ... năm ...).
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Quyền hạn ký (dòng 1 — tùy chọn)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="KT. GIÁM ĐỐC (để trống nếu Giám đốc ký)"
+                        value={adminConfig.permitSignerAuthority ?? DEFAULT_ORDER_SIGNER_AUTHORITY}
+                        onChange={(e) =>
+                          setAdminConfig({ ...adminConfig, permitSignerAuthority: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white uppercase font-bold"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        VD: <span className="font-semibold">KT. GIÁM ĐỐC</span> hoặc <span className="font-semibold">TL. GIÁM ĐỐC</span>. Để trống nếu Giám đốc ký trực tiếp.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Chức danh người ký (dòng 2 — bắt buộc)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder={DEFAULT_ORDER_SIGNER_TITLE}
+                        value={adminConfig.permitSignerTitle ?? DEFAULT_ORDER_SIGNER_TITLE}
+                        onChange={(e) =>
+                          setAdminConfig({ ...adminConfig, permitSignerTitle: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white uppercase font-bold"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        VD: <span className="font-semibold">PHÓ GIÁM ĐỐC</span> hoặc <span className="font-semibold">GIÁM ĐỐC</span>.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Khung xem trước khối chữ ký trên Giấy phép A4 */}
+                  <div className="p-4 rounded-xl bg-[#f8fbff] border border-[#dce8f7] flex flex-col justify-between">
+                    <div className="text-[10px] font-extrabold uppercase tracking-wider text-blue-800 border-b border-[#dce8f7] pb-1.5 mb-2">
+                      Xem trước phần ký Giấy phép (A4)
+                    </div>
+                    <div className="text-center font-serif text-slate-900 leading-snug py-1">
+                      <p className="italic text-[11px]">
+                        {(adminConfig.permitSignLocation || DEFAULT_ORDER_SIGN_LOCATION).trim()}, ngày{' '}
+                        {String(new Date().getDate()).padStart(2, '0')} tháng{' '}
+                        {String(new Date().getMonth() + 1).padStart(2, '0')} năm{' '}
+                        {new Date().getFullYear()}
+                      </p>
+                      <p className="italic text-[10px] text-slate-600">Date.....mm.....yy</p>
+                      {(adminConfig.permitSignerAuthority ?? '').trim() && (
+                        <p className="font-bold uppercase text-[11.5px] mt-1">
+                          {(adminConfig.permitSignerAuthority ?? '').trim()}
+                        </p>
+                      )}
+                      <p className="font-bold uppercase text-[11.5px] mt-0.5">
+                        {(adminConfig.permitSignerTitle || DEFAULT_ORDER_SIGNER_TITLE).trim()}
+                      </p>
+                      <div className="h-10 flex items-center justify-center">
+                        <span className="text-[10px] italic text-slate-400 font-sans">
+                          (Ký, ghi rõ họ tên &amp; đóng dấu)
+                        </span>
+                      </div>
+                      <p className="font-bold text-[12px]">
+                        {(adminConfig.permitSignerName || DEFAULT_ORDER_SIGNER_NAME).trim()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Định mức thời gian 60 / 60 / 10 & Tham số phân trang */}
               <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
                 <h4 className="font-extrabold text-[#07244d] uppercase text-[11px]">
-                  2. Định mức thời gian xử lý chuẩn (SLA) &amp; Tham số phân trang hệ thống
+                  3. Định mức thời gian xử lý chuẩn (SLA) &amp; Tham số phân trang hệ thống
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <div>
@@ -592,11 +766,11 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                 </div>
               </div>
 
-              {/* 3. Mẫu văn bản & Danh mục 8 nhóm kiểm tra BQL */}
+              {/* 4. Mẫu văn bản & 5. Danh mục 8 nhóm kiểm tra BQL */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
                   <h4 className="font-extrabold text-[#07244d] uppercase text-[11px]">
-                    3. Mẫu Thông báo chấp thuận &amp; Dự thảo Giấy phép
+                    4. Mẫu Thông báo chấp thuận &amp; Dự thảo Giấy phép
                   </h4>
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">Mẫu Thông báo BQL Cảng</label>
@@ -624,7 +798,7 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
 
                 <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2.5">
                   <h4 className="font-extrabold text-[#07244d] uppercase text-[11px]">
-                    4. Danh mục kiểm tra 8 nhóm tại bến ({adminConfig.bqlChecklistConfig.length} mục)
+                    5. Danh mục kiểm tra 8 nhóm tại bến ({adminConfig.bqlChecklistConfig.length} mục)
                   </h4>
                   <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
                     {adminConfig.bqlChecklistConfig.map((item, idx) => (

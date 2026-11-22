@@ -43,6 +43,10 @@ import {
   DEFAULT_BP_SYSTEM_CONFIG,
   DEFAULT_CURRENT_WEATHER,
   DEFAULT_OPERATIONAL_ACCOUNTS,
+  DEFAULT_ORDER_SIGNER_AUTHORITY,
+  DEFAULT_ORDER_SIGNER_NAME,
+  DEFAULT_ORDER_SIGNER_TITLE,
+  DEFAULT_ORDER_SIGN_LOCATION,
   DEFAULT_PORTS,
   DEFAULT_ROUTES,
   DEFAULT_RULES_CONFIG,
@@ -70,15 +74,18 @@ import {
 } from '../utils/userPermissions';
 import { dossierArchiveService } from './dossierArchiveService';
 import { RulesEngine } from './rulesEngine';
+import { buildFourCanonicalTrips } from '../config/canonicalTrips';
 
 const CURRENT_DATA_VERSION = 'vrsb_2026_deploy_v9_spec';
 const VESSEL_CATALOG_VERSION = 'vrsb_vessels_lyson_11_2026_11';
 const CAPTAIN_CATALOG_VERSION = 'vrsb_captains_official_11_2026_11_v2';
+const TRIPS_CLEANUP_VERSION = 'vrsb_4_canonical_trips_clean_2026_11_v1';
 
 const STORAGE_KEYS = {
   DATA_VERSION: 'vrsb_data_version',
   VESSEL_CATALOG_VERSION: 'vrsb_vessel_catalog_version',
   CAPTAIN_CATALOG_VERSION: 'vrsb_captain_catalog_version',
+  TRIPS_CLEANUP_VERSION: 'vrsb_trips_cleanup_version',
   TRIPS: 'vrsb_trips',
   VESSELS: 'vrsb_vessels',
   CREW: 'vrsb_crew',
@@ -302,6 +309,7 @@ class Repository {
         localStorage.setItem(STORAGE_KEYS.DATA_VERSION, CURRENT_DATA_VERSION);
         localStorage.setItem(STORAGE_KEYS.VESSEL_CATALOG_VERSION, VESSEL_CATALOG_VERSION);
         localStorage.setItem(STORAGE_KEYS.CAPTAIN_CATALOG_VERSION, CAPTAIN_CATALOG_VERSION);
+        localStorage.setItem(STORAGE_KEYS.TRIPS_CLEANUP_VERSION, TRIPS_CLEANUP_VERSION);
       } catch {}
 
       this.setItem(STORAGE_KEYS.PORTS, DEFAULT_PORTS);
@@ -311,19 +319,22 @@ class Repository {
       this.setItem(STORAGE_KEYS.WEATHER, DEFAULT_CURRENT_WEATHER);
       this.setItem(STORAGE_KEYS.RULES, DEFAULT_RULES_CONFIG);
       this.setItem(STORAGE_KEYS.SHIFTS, this.buildDefaultTodayShifts());
-      this.setItem(STORAGE_KEYS.TRIPS, []);
       this.setItem(STORAGE_KEYS.USERS_LIST, allSeedAccounts);
       this.setItem(STORAGE_KEYS.ADMIN_CONFIG, DEFAULT_ADMIN_OPERATIONAL_CONFIG);
+      this.setItem(STORAGE_KEYS.TRIPS, buildFourCanonicalTrips(this.getPermitSignerConfig()));
       this.setItem(STORAGE_KEYS.BP_CONFIG, DEFAULT_BP_SYSTEM_CONFIG);
       this.setItem(STORAGE_KEYS.BP_DE_NGHI_DUNG, []);
       this.setItem(STORAGE_KEYS.BP_KIEM_SOAT, []);
       this.setItem(STORAGE_KEYS.BP_ACCESS_LOGS, []);
       this.setItem(STORAGE_KEYS.AUDIT_LOGS, []);
       this.setItem(STORAGE_KEYS.NOTIFICATIONS, []);
+      this.setItem(STORAGE_KEYS.KPI_EVENTS, []);
+      this.setItem(STORAGE_KEYS.KPI_EXCLUSIONS, []);
+      this.setItem(STORAGE_KEYS.KPI_WARNINGS, []);
       this.setItem(STORAGE_KEYS.ORDER_CONFIG, {
         prefixYear: String(new Date().getFullYear()),
         defaultSuffix: 'LS-AB',
-        currentSequence: 0,
+        currentSequence: 2,
       });
       this.setItem(STORAGE_KEYS.INCOMING_CONFIG, {
         prefixYear: String(new Date().getFullYear()),
@@ -428,13 +439,75 @@ class Repository {
       if (!cur) {
         byId.set(seed.id, seed);
         usersChanged = true;
-      } else if (!cur.assignedPortId && seed.assignedPortId) {
-        byId.set(seed.id, { ...cur, assignedPortId: seed.assignedPortId });
-        usersChanged = true;
+      } else {
+        let nextUser = cur;
+        if (!cur.assignedPortId && seed.assignedPortId) {
+          nextUser = { ...nextUser, assignedPortId: seed.assignedPortId };
+        }
+        if (seed.id === 'USR-02' && cur.fullName === 'Phạm Minh Đức') {
+          nextUser = { ...nextUser, fullName: DEFAULT_ORDER_SIGNER_NAME };
+        }
+        if (nextUser !== cur) {
+          byId.set(seed.id, nextUser);
+          usersChanged = true;
+        }
       }
     });
     if (usersChanged) {
       this.setItem(STORAGE_KEYS.USERS_LIST, Array.from(byId.values()));
+    }
+
+    // Dọn sạch toàn bộ hồ sơ mẫu / hồ sơ nháp cũ, chỉ giữ đúng 4 hồ sơ chuẩn 4 chặng (chạy 1 lần)
+    let savedTripsCleanupVersion: string | null = null;
+    try {
+      savedTripsCleanupVersion = localStorage.getItem(STORAGE_KEYS.TRIPS_CLEANUP_VERSION);
+    } catch {}
+    if (savedTripsCleanupVersion !== TRIPS_CLEANUP_VERSION) {
+      this.setItem(STORAGE_KEYS.TRIPS, buildFourCanonicalTrips(this.getPermitSignerConfig()));
+      this.setItem(STORAGE_KEYS.INCOMING_DOSSIERS, []);
+      this.setItem(STORAGE_KEYS.BP_DE_NGHI_DUNG, []);
+      this.setItem(STORAGE_KEYS.BP_KIEM_SOAT, []);
+      this.setItem(STORAGE_KEYS.NOTIFICATIONS, []);
+      this.setItem(STORAGE_KEYS.KPI_EVENTS, []);
+      this.setItem(STORAGE_KEYS.KPI_EXCLUSIONS, []);
+      this.setItem(STORAGE_KEYS.KPI_WARNINGS, []);
+      this.setItem(STORAGE_KEYS.ORDER_CONFIG, {
+        prefixYear: String(new Date().getFullYear()),
+        defaultSuffix: 'LS-AB',
+        currentSequence: 2,
+      });
+      try {
+        localStorage.setItem(STORAGE_KEYS.TRIPS_CLEANUP_VERSION, TRIPS_CLEANUP_VERSION);
+      } catch {}
+    }
+
+    // Đồng bộ tên người ký lệnh mặc định theo cấu hình cho các hồ sơ đã lưu trước đó
+    const defaultSignerName = this.getPermitSignerConfig().name;
+    const storedTripsForSigner = this.getItem<TripRecord[]>(STORAGE_KEYS.TRIPS, []);
+    let tripsSignerUpdated = false;
+    const syncedSignerTrips = storedTripsForSigner.map((t) => {
+      const st = normalizeStatus(t.status);
+      const isIssued = [
+        'DA_CAP_PHEP',
+        'DA_XUAT_BEN',
+        'DA_CAP_BEN',
+        'TAM_GIU_BIEN_PHONG',
+        'HET_HIEU_LUC',
+        'THU_HOI',
+      ].includes(st);
+      const needsUpdate =
+        t.approvedByName === 'Phạm Minh Đức' ||
+        t.approvedByName === 'Lãnh đạo Sở Xây dựng' ||
+        (isIssued && !t.approvedByName);
+      if (!needsUpdate) return t;
+      tripsSignerUpdated = true;
+      return {
+        ...t,
+        approvedByName: defaultSignerName,
+      };
+    });
+    if (tripsSignerUpdated) {
+      this.setItem(STORAGE_KEYS.TRIPS, syncedSignerTrips);
     }
 
     // Bảo đảm quy tắc R1..R12 đủ
@@ -922,15 +995,51 @@ class Repository {
     const normalizedPageSize = Number.isFinite(rawPageSize)
       ? Math.min(200, Math.max(5, Math.floor(rawPageSize)))
       : 15;
+    const permitSignerName =
+      typeof saved.permitSignerName === 'string' && saved.permitSignerName.trim()
+        ? saved.permitSignerName.trim()
+        : DEFAULT_ORDER_SIGNER_NAME;
+    const permitSignerAuthority =
+      typeof saved.permitSignerAuthority === 'string'
+        ? saved.permitSignerAuthority.trim()
+        : DEFAULT_ORDER_SIGNER_AUTHORITY;
+    const permitSignerTitle =
+      typeof saved.permitSignerTitle === 'string' && saved.permitSignerTitle.trim()
+        ? saved.permitSignerTitle.trim()
+        : DEFAULT_ORDER_SIGNER_TITLE;
+    const permitSignLocation =
+      typeof saved.permitSignLocation === 'string' && saved.permitSignLocation.trim()
+        ? saved.permitSignLocation.trim()
+        : DEFAULT_ORDER_SIGN_LOCATION;
     return {
       ...DEFAULT_ADMIN_OPERATIONAL_CONFIG,
       ...saved,
+      permitSignerName,
+      permitSignerAuthority,
+      permitSignerTitle,
+      permitSignLocation,
       paginationPageSize: normalizedPageSize,
       bqlChecklistConfig:
         saved.bqlChecklistConfig && saved.bqlChecklistConfig.length > 0
           ? saved.bqlChecklistConfig
           : DEFAULT_ADMIN_OPERATIONAL_CONFIG.bqlChecklistConfig,
     };
+  }
+
+  public getPermitSignerConfig(): {
+    name: string;
+    authority: string;
+    title: string;
+    location: string;
+    fullTitle: string;
+  } {
+    const cfg = this.getAdminConfig();
+    const name = (cfg.permitSignerName || DEFAULT_ORDER_SIGNER_NAME).trim();
+    const authority = (cfg.permitSignerAuthority ?? DEFAULT_ORDER_SIGNER_AUTHORITY).trim();
+    const title = (cfg.permitSignerTitle || DEFAULT_ORDER_SIGNER_TITLE).trim();
+    const location = (cfg.permitSignLocation || DEFAULT_ORDER_SIGN_LOCATION).trim();
+    const fullTitle = [authority, title].filter(Boolean).join(' • ');
+    return { name, authority, title, location, fullTitle };
   }
 
   public getPaginationPageSize(): number {
@@ -942,19 +1051,31 @@ class Repository {
       200,
       Math.max(5, Math.floor(Number(config.paginationPageSize) || 15))
     );
+    const permitSignerName = (config.permitSignerName || '').trim() || DEFAULT_ORDER_SIGNER_NAME;
+    const permitSignerAuthority =
+      config.permitSignerAuthority !== undefined
+        ? config.permitSignerAuthority.trim()
+        : DEFAULT_ORDER_SIGNER_AUTHORITY;
+    const permitSignerTitle = (config.permitSignerTitle || '').trim() || DEFAULT_ORDER_SIGNER_TITLE;
+    const permitSignLocation = (config.permitSignLocation || '').trim() || DEFAULT_ORDER_SIGN_LOCATION;
     const payload: AdminOperationalConfig = {
       ...config,
+      permitSignerName,
+      permitSignerAuthority,
+      permitSignerTitle,
+      permitSignLocation,
       paginationPageSize: normalizedPageSize,
     };
     this.setItem(STORAGE_KEYS.ADMIN_CONFIG, payload);
     if (actor) {
+      const signerRoleSummary = [permitSignerAuthority, permitSignerTitle].filter(Boolean).join(' / ');
       this.addAuditLog({
         userId: actor.id,
         userName: actor.fullName,
         userRole: actor.role,
         action: 'CẬP_NHẬT_CẤU_HÌNH_VẬN_HÀNH',
         targetType: 'SYSTEM',
-        details: `Cập nhật cấu hình QR thanh toán, mẫu thông báo/giấy phép, checklist 8 nhóm BQL, định mức (${payload.bqlProcessingSlaMinutes}/${payload.deptProcessingSlaMinutes}/${payload.officeUploadSlaMinutes}p) và phân trang (${normalizedPageSize} bản ghi/trang).`,
+        details: `Cập nhật cấu hình QR thanh toán, người ký phát hành Giấy phép (${permitSignerName} - ${signerRoleSummary}, địa danh: ${permitSignLocation}), mẫu thông báo/giấy phép, checklist 8 nhóm BQL, định mức (${payload.bqlProcessingSlaMinutes}/${payload.deptProcessingSlaMinutes}/${payload.officeUploadSlaMinutes}p) và phân trang (${normalizedPageSize} bản ghi/trang).`,
       });
     }
     this.emitUserMutation();
@@ -2875,7 +2996,15 @@ class Repository {
     trip.issuedPdfServerPath = params.serverPath;
     trip.sealedAt = nowIso;
     trip.sealedByName = actor.fullName;
-    trip.approvedByName = params.signerName || trip.approvedByName || 'Lãnh đạo Sở Xây dựng';
+    const signerCfg = this.getPermitSignerConfig();
+    trip.approvedByName =
+      params.signerName?.trim() ||
+      (trip.approvedByName &&
+      trip.approvedByName !== 'Phạm Minh Đức' &&
+      trip.approvedByName !== 'Lãnh đạo Sở Xây dựng'
+        ? trip.approvedByName
+        : signerCfg.name);
+    trip.approvedByTitle = signerCfg.fullTitle;
     trip.isPermitSuspended = false;
     trip.deptClock = this.completeClock(trip.deptClock, nowIso);
     trip.officeSubmissionRecord = {

@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { TripRecord, Vessel } from '../types';
 import { formatDate, formatDateTime, formatTime, numberToVietnameseWords, maskIdNumber, maskPhone } from '../utils/formatters';
 import {
@@ -49,11 +50,25 @@ export const OfficialFormsModal: React.FC<OfficialFormsModalProps> = ({
   const [showFullId, setShowFullId] = useState<boolean>(false);
   const printAreaRef = useRef<HTMLDivElement>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (defaultTab) {
       setActiveTab(defaultTab);
     }
   }, [defaultTab, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -102,35 +117,47 @@ export const OfficialFormsModal: React.FC<OfficialFormsModalProps> = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white">
-      <div className="relative bg-white rounded-[24px] shadow-2xl max-w-5xl w-full max-h-[96vh] flex flex-col overflow-hidden border border-[#dce8f7] print:border-none print:shadow-none print:max-w-none print:w-full print:max-h-none print:static">
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Xem trước 5 Giấy tờ hồ sơ theo Phụ lục 02"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 print:static print:inset-auto print:p-0 print:bg-white print:block"
+    >
+      <div className="relative bg-white rounded-2xl sm:rounded-[24px] shadow-2xl max-w-5xl w-full max-h-[calc(100dvh-1rem)] sm:max-h-[94dvh] flex flex-col overflow-hidden border border-[#dce8f7] print:border-none print:shadow-none print:max-w-none print:w-full print:max-h-none print:static">
         {/* Header Modal */}
-        <div className="px-5 py-3.5 bg-gradient-to-r from-[#065fd4] via-[#0c74e8] to-[#1a8df5] text-white flex items-center justify-between gap-2 shrink-0 print:hidden">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="p-2 rounded-xl bg-white/15 border border-white/25 shrink-0">
+        <div className="px-3 py-2.5 sm:px-5 sm:py-3.5 bg-gradient-to-r from-[#065fd4] via-[#0c74e8] to-[#1a8df5] text-white flex items-center justify-between gap-2 shrink-0 print:hidden">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1">
+            <div className="hidden sm:flex p-2 rounded-xl bg-white/15 border border-white/25 shrink-0">
               <FileText className="w-5 h-5 text-white" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-sm font-black uppercase tracking-wide truncate">
+              <h2 className="text-xs sm:text-sm font-black uppercase tracking-wide truncate">
                 Xem trước 5 Giấy tờ hồ sơ theo Phụ lục 02
               </h2>
-              <p className="text-[11px] text-blue-100 truncate">
+              <p className="text-[10px] sm:text-[11px] text-blue-100 truncate">
                 Thẩm định hồ sơ rời bến VR-SB • Tàu {trip.vesselName || vessel?.name} ({trip.vesselRegNumber || vessel?.regNumber})
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
+              type="button"
               onClick={() => window.print()}
-              className="px-3 py-1.5 text-xs font-bold bg-white/15 hover:bg-white/25 text-white rounded-full flex items-center gap-1.5 border border-white/25 transition cursor-pointer"
+              className="px-2.5 sm:px-3 py-1.5 text-xs font-bold bg-white/15 hover:bg-white/25 text-white rounded-full flex items-center gap-1.5 border border-white/25 transition cursor-pointer"
               title="In trực tiếp"
             >
               <Printer className="w-4 h-4" />
-              <span className="hidden sm:inline">In biểu mẫu</span>
+              <span className="hidden md:inline">In biểu mẫu</span>
             </button>
             <button
+              type="button"
               disabled={isExporting}
               onClick={() => {
                 const title =
@@ -145,16 +172,19 @@ export const OfficialFormsModal: React.FC<OfficialFormsModalProps> = ({
                     : 'Phu_Luc_01_Kiem_Tra_Ben';
                 handleDownloadPdf(title);
               }}
-              className="px-3.5 py-1.5 text-xs font-extrabold bg-[#f4cf47] hover:bg-[#eab308] text-[#072b61] rounded-full flex items-center gap-1.5 shadow-xs transition cursor-pointer disabled:opacity-60"
+              className="px-2.5 sm:px-3.5 py-1.5 text-xs font-extrabold bg-[#f4cf47] hover:bg-[#eab308] text-[#072b61] rounded-full flex items-center gap-1.5 shadow-xs transition cursor-pointer disabled:opacity-60"
             >
               {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              <span>{isExporting ? 'Đang tạo PDF...' : 'Tải PDF'}</span>
+              <span className="hidden sm:inline">{isExporting ? 'Đang tạo PDF...' : 'Tải PDF'}</span>
             </button>
             <button
+              type="button"
               onClick={onClose}
-              className="p-1.5 text-white/80 hover:text-white rounded-full hover:bg-white/15 transition cursor-pointer"
+              aria-label="Đóng biểu mẫu"
+              className="px-2.5 py-1.5 text-xs font-bold text-white bg-white/15 hover:bg-rose-600 rounded-full flex items-center gap-1 transition cursor-pointer"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
+              <span className="hidden sm:inline">Đóng</span>
             </button>
           </div>
         </div>
@@ -235,10 +265,10 @@ export const OfficialFormsModal: React.FC<OfficialFormsModalProps> = ({
         </div>
 
         {/* VÙNG NỘI DUNG BIỂU MẪU IN / XEM TRƯỚC (Chuẩn giấy A4) */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-200/60 print:bg-white print:p-0">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto p-2.5 sm:p-6 md:p-8 bg-slate-200/60 print:overflow-visible print:bg-white print:p-0">
           <div
             ref={printAreaRef}
-            className="bg-white mx-auto max-w-[210mm] min-h-[297mm] p-8 sm:p-12 shadow-md border border-slate-300 text-slate-900 font-serif leading-relaxed print:shadow-none print:border-none print:p-6"
+            className="bg-white mx-auto max-w-[210mm] min-h-fit sm:min-h-[297mm] p-4 sm:p-8 md:p-12 shadow-md border border-slate-300 text-slate-900 font-serif leading-relaxed print:shadow-none print:border-none print:p-6"
             style={{ fontFamily: '"Times New Roman", Times, serif' }}
           >
             {/* ======================================================== */}
@@ -1154,22 +1184,26 @@ export const OfficialFormsModal: React.FC<OfficialFormsModalProps> = ({
         </div>
 
         {/* Chân Modal */}
-        <div className="px-5 py-3 bg-slate-100 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600 print:hidden">
-          <div className="flex items-center gap-1.5">
-            <Shield className="w-4 h-4 text-emerald-600" />
-            <span>Biểu mẫu điện tử tích hợp đầy đủ chữ ký, giờ và mã đối chiếu Phụ lục 01.</span>
+        <div className="px-3 sm:px-5 py-2.5 sm:py-3 bg-slate-100 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 shrink-0 print:hidden">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Shield className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="truncate sm:whitespace-normal">
+              Biểu mẫu điện tử tích hợp đầy đủ chữ ký, giờ và mã đối chiếu Phụ lục 01.
+            </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0 ml-auto">
             <button
+              type="button"
               onClick={onClose}
-              className="px-4 py-2 bg-slate-200 hover:bg-slate-300 font-semibold text-slate-800 rounded-lg transition cursor-pointer"
+              className="px-4 py-1.5 sm:py-2 bg-slate-200 hover:bg-slate-300 font-semibold text-slate-800 rounded-lg transition cursor-pointer"
             >
               Đóng xem trước
             </button>
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

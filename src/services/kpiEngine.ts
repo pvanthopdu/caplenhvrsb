@@ -46,7 +46,7 @@ export function formatViInteger(val: number): string {
 }
 
 const STAFF_NAME_BY_ID: Record<string, string> = {
-  'USR-02': 'Phạm Minh Đức',
+  'USR-02': 'Võ Phiên',
   'USR-03': 'Nguyễn Thị Mỹ Hạnh',
   'USR-04': 'Nguyễn Phùng Nguyễn',
   'USR-05': 'Hoàng Văn Thắng',

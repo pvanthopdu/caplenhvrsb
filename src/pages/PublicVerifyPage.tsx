@@ -79,7 +79,7 @@ export const PublicVerifyPage: React.FC<PublicVerifyPageProps> = ({ initialCode 
             value={searchCode}
             onChange={(e) => setSearchCode(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            placeholder="VD: 110/2026/AB-LS hoặc HS-2026-0194..."
+            placeholder="VD: 001/2026/LS-AB hoặc HS-2026-0003..."
             className="flex-1 px-3.5 py-2.5 text-xs border border-[#dce8f7] rounded-full bg-[#f4f8ff] focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 font-bold text-[#07244d]"
           />
           <button
@@ -161,7 +161,11 @@ export const PublicVerifyPage: React.FC<PublicVerifyPageProps> = ({ initialCode 
               <div className="flex flex-col sm:flex-row sm:justify-between gap-0.5 sm:gap-4 py-1.5 border-b border-slate-100">
                 <span className="text-slate-500 shrink-0">Cấp phép / Ký phát hành:</span>
                 <span className="font-bold text-blue-900 sm:text-right">
-                  {searchedTrip.approvedByName || 'Lãnh đạo Sở Xây dựng (Office)'}
+                  {!searchedTrip.approvedByName ||
+                  searchedTrip.approvedByName === 'Phạm Minh Đức' ||
+                  searchedTrip.approvedByName === 'Lãnh đạo Sở Xây dựng'
+                    ? repository.getPermitSignerConfig().name
+                    : searchedTrip.approvedByName}
                 </span>
               </div>
               <div className="flex flex-col sm:flex-row sm:justify-between gap-0.5 sm:gap-4 py-1.5">

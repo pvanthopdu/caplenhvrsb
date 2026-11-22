@@ -963,6 +963,10 @@ export interface AdminOperationalConfig {
   paymentQrAccountNumber: string;
   paymentQrAccountHolder: string;
   paymentQrNote: string;
+  permitSignerName?: string;          // Họ và tên người ký phát hành Giấy phép (mặc định: Võ Phiên)
+  permitSignerAuthority?: string;     // Dòng quyền hạn ký (VD: KT. GIÁM ĐỐC; để trống nếu Giám đốc ký trực tiếp)
+  permitSignerTitle?: string;         // Chức danh người ký (VD: PHÓ GIÁM ĐỐC hoặc GIÁM ĐỐC)
+  permitSignLocation?: string;        // Địa danh ký ban hành (mặc định: Quảng Ngãi)
   approvalNoticeTemplate: string;
   permitDraftTemplate: string;
   bqlProcessingSlaMinutes: number;    // Mặc định 60 phút

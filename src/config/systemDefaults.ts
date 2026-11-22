@@ -580,12 +580,21 @@ const DEFAULT_PAYMENT_QR_SVG = `data:image/svg+xml;utf8,${encodeURIComponent(
   </svg>`
 )}`;
 
+export const DEFAULT_ORDER_SIGNER_NAME = 'Võ Phiên';
+export const DEFAULT_ORDER_SIGNER_AUTHORITY = 'KT. GIÁM ĐỐC';
+export const DEFAULT_ORDER_SIGNER_TITLE = 'PHÓ GIÁM ĐỐC';
+export const DEFAULT_ORDER_SIGN_LOCATION = 'Quảng Ngãi';
+
 export const DEFAULT_ADMIN_OPERATIONAL_CONFIG: AdminOperationalConfig = {
   paymentQrImageUrl: DEFAULT_PAYMENT_QR_SVG,
   paymentQrBankName: 'Vietcombank - Chi nhánh Quảng Ngãi',
   paymentQrAccountNumber: '0271001089999',
   paymentQrAccountHolder: 'Ban Quản lý Cảng tỉnh Quảng Ngãi',
   paymentQrNote: 'Nội dung CK: [Số ĐK tàu] [Mã hồ sơ] NOP PHI ROI CANG',
+  permitSignerName: DEFAULT_ORDER_SIGNER_NAME,
+  permitSignerAuthority: DEFAULT_ORDER_SIGNER_AUTHORITY,
+  permitSignerTitle: DEFAULT_ORDER_SIGNER_TITLE,
+  permitSignLocation: DEFAULT_ORDER_SIGN_LOCATION,
   approvalNoticeTemplate:
     'THÔNG BÁO CHẤP THUẬN HỒ SƠ ĐỀ NGHỊ CẤP PHÉP RỜI CẢNG, BẾN\nBan Quản lý cảng xác nhận đã kiểm tra thực tế phương tiện {{tenTau}} ({{soDangKy}}), hồ sơ {{maHoSo}} đủ điều kiện an toàn và đã hoàn thành nghĩa vụ nộp phí, kính chuyển Sở Xây dựng xem xét cấp Giấy phép rời cảng.',
   permitDraftTemplate:
@@ -667,7 +676,7 @@ export const DEFAULT_OPERATIONAL_ACCOUNTS: UserAccount[] = [
     id: 'USR-02',
     username: 'lanhdao_so',
     password: '123456',
-    fullName: 'Phạm Minh Đức',
+    fullName: DEFAULT_ORDER_SIGNER_NAME,
     role: 'LEADER',
     phone: '0914000002',
     department: 'Lãnh đạo Sở Xây dựng tỉnh Quảng Ngãi',

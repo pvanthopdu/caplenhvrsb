@@ -215,7 +215,7 @@ export const BpQrVerifyPage: React.FC<BpQrVerifyPageProps> = ({ currentUser }) =
                 type="text"
                 value={manualInput}
                 onChange={(e) => setManualInput(e.target.value)}
-                placeholder="VD: 110/2026/AB-LS, 109/2026/LS-AB, HS-2026-0194..."
+                placeholder="VD: 001/2026/LS-AB, 002/2026/LS-AB, HS-2026-0003..."
                 className="w-full min-h-[44px] pl-9 pr-3 rounded-lg border border-slate-300 text-sm font-mono text-slate-900 focus:border-sky-600 focus:outline-none"
               />
             </div>
@@ -228,7 +228,7 @@ export const BpQrVerifyPage: React.FC<BpQrVerifyPageProps> = ({ currentUser }) =
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             <span className="text-slate-500 py-1">Mã thử nhanh:</span>
-            {['110/2026/AB-LS', '109/2026/LS-AB', 'HS-2026-0193', 'KHONG-TON-TAI'].map((sample) => (
+            {['001/2026/LS-AB', '002/2026/LS-AB', 'HS-2026-0003', 'KHONG-TON-TAI'].map((sample) => (
               <button
                 key={sample}
                 type="button"

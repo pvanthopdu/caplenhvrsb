@@ -54,7 +54,14 @@ export const DigitalOrderA4: React.FC<DigitalOrderA4Props> = ({
   const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
   const [isArchivingServer, setIsArchivingServer] = useState<boolean>(false);
   const [serverArchiveNotice, setServerArchiveNotice] = useState<string | null>(null);
+  const [signerCfg, setSignerCfg] = useState(() => repository.getPermitSignerConfig());
   const stampIdPrefix = useId().replace(/:/g, '');
+
+  useEffect(() => {
+    return repository.subscribe(() => {
+      setSignerCfg(repository.getPermitSignerConfig());
+    });
+  }, []);
 
   const vesselObj =
     vessel ||
@@ -121,7 +128,12 @@ export const DigitalOrderA4: React.FC<DigitalOrderA4Props> = ({
     : vesselObj?.grossTonnage
     ? `${vesselObj.grossTonnage}`
     : '';
-  const signerName = trip.approvedByName || 'Phạm Minh Đức';
+  const signerName =
+    !trip.approvedByName ||
+    trip.approvedByName === 'Phạm Minh Đức' ||
+    trip.approvedByName === 'Lãnh đạo Sở Xây dựng'
+      ? signerCfg.name
+      : trip.approvedByName;
 
   const normalizedStatus = normalizeStatus(trip.status);
   const isActuallySigned = Boolean(
@@ -489,11 +501,19 @@ export const DigitalOrderA4: React.FC<DigitalOrderA4Props> = ({
 
               <div className="sm:col-span-7 print:col-span-7 text-center text-[11pt] sm:text-[12pt] leading-snug relative order-1 sm:order-2 print:order-2">
                 <p className="italic">
-                  Quảng Ngãi, ngày {signD} tháng {signM} năm {signY}
+                  {signerCfg.location}, ngày {signD} tháng {signM} năm {signY}
                 </p>
                 <p className="italic">Date.....mm.....yy</p>
-                <p className="font-bold uppercase mt-0.5 relative z-10">KT. GIÁM ĐỐC</p>
-                <p className="font-bold uppercase relative z-10">PHÓ GIÁM ĐỐC</p>
+                {signerCfg.authority && (
+                  <p className="font-bold uppercase mt-0.5 relative z-10">{signerCfg.authority}</p>
+                )}
+                <p
+                  className={`font-bold uppercase relative z-10 ${
+                    signerCfg.authority ? '' : 'mt-0.5'
+                  }`}
+                >
+                  {signerCfg.title}
+                </p>
 
                 {/* Vùng con dấu tròn đỏ + chữ ký (hoặc để trống khi trình ký tươi) */}
                 <div className="relative h-28 w-full max-w-[290px] mx-auto flex items-center justify-center">

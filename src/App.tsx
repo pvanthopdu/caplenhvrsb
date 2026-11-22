@@ -561,9 +561,9 @@ export default function App() {
   const currentSelectedTrip = selectedTripId ? repository.getTripById(selectedTripId) : undefined;
 
   return (
-    <div className={`min-h-screen bg-gradient-to-b from-[#edf5fe] via-[#f5f9ff] to-[#e4effc] flex flex-col font-sans text-slate-900 relative overflow-x-clip transition-all ${largeFontMode ? 'large-font-mode' : ''}`}>
+    <div className={`min-h-screen bg-gradient-to-b from-[#edf5fe] via-[#f5f9ff] to-[#e4effc] flex flex-col font-sans text-slate-900 relative isolate overflow-x-clip transition-all ${largeFontMode ? 'large-font-mode' : ''}`}>
       {/* Nền sóng biển & cảng biển xanh dịu ở cạnh dưới giao diện */}
-      <div className="fixed bottom-0 left-0 right-0 pointer-events-none z-0 overflow-hidden print:hidden">
+      <div className="fixed bottom-0 left-0 right-0 pointer-events-none -z-10 overflow-hidden print:hidden">
         <svg
           className="w-full h-[84px] sm:h-[118px]"
           viewBox="0 0 1440 160"
@@ -625,7 +625,7 @@ export default function App() {
         onToggleSidebar={handleToggleSidebar}
       />
 
-      <div className="flex-1 flex w-full max-w-[1480px] mx-auto px-0 sm:px-2 lg:px-4 relative z-10 transition-all duration-300">
+      <div className="flex-1 flex w-full max-w-[1480px] mx-auto px-0 sm:px-2 lg:px-4 relative transition-all duration-300">
         <Sidebar
           currentPage={currentPage}
           onNavigate={handleNavigate}
