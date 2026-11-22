@@ -40,6 +40,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { CoastalPageHero } from '../components/CoastalPageHero';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 import { dossierArchiveService, ServerDossiersOverview } from '../services/dossierArchiveService';
 
 interface SystemAdminPageProps {
@@ -63,6 +64,8 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
   const [adminConfigSavedMsg, setAdminConfigSavedMsg] = useState<string>('');
   const qrFileInputRef = useRef<HTMLInputElement>(null);
   const personalAccessLogs = repository.getPersonalDataAccessLogs();
+  const auditPagination = usePagination(auditLogs, activeTab);
+  const personalAccessPagination = usePagination(personalAccessLogs, activeTab);
   const [anonymizeResult, setAnonymizeResult] = useState<any>(null);
   const [resetSuccessMessage, setResetSuccessMessage] = useState<string>('');
   const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
@@ -261,15 +264,22 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
 
   const handleSaveAdminConfig = (e: React.FormEvent) => {
     e.preventDefault();
+    const normalizedPageSize = Math.min(
+      200,
+      Math.max(5, Math.floor(Number(adminConfig.paginationPageSize) || 15))
+    );
     const normalized: AdminOperationalConfig = {
       ...adminConfig,
       bqlProcessingSlaMinutes: Math.max(5, Number(adminConfig.bqlProcessingSlaMinutes) || 60),
       deptProcessingSlaMinutes: Math.max(5, Number(adminConfig.deptProcessingSlaMinutes) || 60),
       officeUploadSlaMinutes: Math.max(1, Number(adminConfig.officeUploadSlaMinutes) || 10),
+      paginationPageSize: normalizedPageSize,
     };
     repository.saveAdminConfig(normalized, currentUser);
     setAdminConfig(normalized);
-    setAdminConfigSavedMsg('Đã lưu cấu hình QR thanh toán, mẫu văn bản, định mức 60/60/10p và checklist BQL 8 nhóm!');
+    setAdminConfigSavedMsg(
+      `Đã lưu cấu hình QR thanh toán, mẫu văn bản, định mức 60/60/10p, phân trang (${normalizedPageSize} bản ghi/trang) và checklist BQL 8 nhóm!`
+    );
     setTimeout(() => setAdminConfigSavedMsg(''), 5000);
   };
 
@@ -501,12 +511,12 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                 </div>
               </div>
 
-              {/* 2. Định mức thời gian 60 / 60 / 10 */}
+              {/* 2. Định mức thời gian 60 / 60 / 10 & Tham số phân trang */}
               <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
                 <h4 className="font-extrabold text-[#07244d] uppercase text-[11px]">
-                  2. Định mức thời gian xử lý chuẩn (SLA)
+                  2. Định mức thời gian xử lý chuẩn (SLA) &amp; Tham số phân trang hệ thống
                 </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">
                       Đồng hồ 1: BQL Cảng (phút)
@@ -557,6 +567,27 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                       }
                       className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-bold"
                     />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-blue-900 mb-1">
+                      Phân trang mặc định (bản ghi/trang)
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={200}
+                      value={adminConfig.paginationPageSize ?? 15}
+                      onChange={(e) =>
+                        setAdminConfig({
+                          ...adminConfig,
+                          paginationPageSize: Number(e.target.value),
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-blue-300 bg-blue-50/40 rounded-xl font-mono font-bold text-blue-950"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Mặc định 15. Tự động hiện thanh phân trang khi bảng vượt quá ngưỡng này.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -840,43 +871,55 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                   <span className="font-bold text-slate-800">{auditLogs.length} sự kiện ghi nhận</span>
                 </div>
 
-                <div className="overflow-x-auto border border-[#dce8f7] rounded-2xl max-h-96">
-                  <table className="w-full min-w-[760px] text-left text-xs text-slate-700">
-                    <thead className="bg-[#edf4fe] text-[#07244d] uppercase text-[10px] font-extrabold border-b border-[#dce8f7] sticky top-0">
-                      <tr>
-                        <th className="py-2.5 px-3">Thời gian</th>
-                        <th className="py-2.5 px-3">Người dùng / Ca trực</th>
-                        <th className="py-2.5 px-3">Vai trò</th>
-                        <th className="py-2.5 px-3">Hành động</th>
-                        <th className="py-2.5 px-3">Chi tiết / Thay đổi</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {auditLogs.map((log) => (
-                        <tr key={log.id} className="hover:bg-slate-50">
-                          <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
-                            {formatDateTime(log.timestamp)}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <p className="font-bold text-slate-900">{log.userName}</p>
-                            {log.shiftName && (
-                              <p className="text-[10px] text-emerald-700 font-semibold">{log.shiftName}</p>
-                            )}
-                          </td>
-                          <td className="py-2.5 px-3 text-[11px] text-blue-700 font-semibold">{log.userRole}</td>
-                          <td className="py-2.5 px-3 font-mono font-bold text-slate-800">{log.action}</td>
-                          <td className="py-2.5 px-3 text-slate-600 max-w-md">
-                            <p className="truncate" title={log.details}>{log.details}</p>
-                            {(log.beforeValue || log.afterValue) && (
-                              <p className="text-[10px] font-mono text-slate-500">
-                                {log.beforeValue || '—'} → <strong className="text-slate-800">{log.afterValue || '—'}</strong>
-                              </p>
-                            )}
-                          </td>
+                <div className="border border-[#dce8f7] rounded-2xl overflow-hidden bg-white">
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-left text-xs text-slate-700">
+                      <thead className="bg-[#edf4fe] text-[#07244d] uppercase text-[10px] font-extrabold border-b border-[#dce8f7]">
+                        <tr>
+                          <th className="py-2.5 px-3">Thời gian</th>
+                          <th className="py-2.5 px-3">Người dùng / Ca trực</th>
+                          <th className="py-2.5 px-3">Vai trò</th>
+                          <th className="py-2.5 px-3">Hành động</th>
+                          <th className="py-2.5 px-3">Chi tiết / Thay đổi</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {auditPagination.pageItems.map((log) => (
+                          <tr key={log.id} className="hover:bg-slate-50">
+                            <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
+                              {formatDateTime(log.timestamp)}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <p className="font-bold text-slate-900">{log.userName}</p>
+                              {log.shiftName && (
+                                <p className="text-[10px] text-emerald-700 font-semibold">{log.shiftName}</p>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-[11px] text-blue-700 font-semibold">{log.userRole}</td>
+                            <td className="py-2.5 px-3 font-mono font-bold text-slate-800">{log.action}</td>
+                            <td className="py-2.5 px-3 text-slate-600 max-w-md">
+                              <p className="truncate" title={log.details}>{log.details}</p>
+                              {(log.beforeValue || log.afterValue) && (
+                                <p className="text-[10px] font-mono text-slate-500">
+                                  {log.beforeValue || '—'} → <strong className="text-slate-800">{log.afterValue || '—'}</strong>
+                                </p>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <PaginationBar
+                    currentPage={auditPagination.currentPage}
+                    totalPages={auditPagination.totalPages}
+                    totalItems={auditPagination.totalItems}
+                    pageSize={auditPagination.pageSize}
+                    startIndex={auditPagination.startIndex}
+                    endIndex={auditPagination.endIndex}
+                    onPageChange={auditPagination.setCurrentPage}
+                    itemLabel="sự kiện"
+                  />
                 </div>
               </div>
 
@@ -893,37 +936,49 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                   <span className="font-bold text-slate-800">{personalAccessLogs.length} lượt xem</span>
                 </div>
 
-                <div className="overflow-x-auto border border-[#dce8f7] rounded-2xl max-h-72">
-                  <table className="w-full min-w-[640px] text-left text-xs text-slate-700">
-                    <thead className="bg-amber-50 text-amber-950 uppercase text-[10px] font-extrabold border-b border-amber-200 sticky top-0">
-                      <tr>
-                        <th className="py-2.5 px-3">Thời điểm</th>
-                        <th className="py-2.5 px-3">Người xem / Khai thác</th>
-                        <th className="py-2.5 px-3">Mã hồ sơ chuyến</th>
-                        <th className="py-2.5 px-3">Lý do truy cập</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {personalAccessLogs.length === 0 ? (
+                <div className="border border-[#dce8f7] rounded-2xl overflow-hidden bg-white">
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px] text-left text-xs text-slate-700">
+                      <thead className="bg-amber-50 text-amber-950 uppercase text-[10px] font-extrabold border-b border-amber-200">
                         <tr>
-                          <td colSpan={4} className="py-6 text-center text-slate-400">
-                            Chưa có lượt truy cập dữ liệu cá nhân nào được ghi nhận.
-                          </td>
+                          <th className="py-2.5 px-3">Thời điểm</th>
+                          <th className="py-2.5 px-3">Người xem / Khai thác</th>
+                          <th className="py-2.5 px-3">Mã hồ sơ chuyến</th>
+                          <th className="py-2.5 px-3">Lý do truy cập</th>
                         </tr>
-                      ) : (
-                        personalAccessLogs.map((entry) => (
-                          <tr key={entry.id} className="hover:bg-amber-50/30">
-                            <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
-                              {formatDateTime(entry.thoiDiem)}
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {personalAccessLogs.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} className="py-6 text-center text-slate-400">
+                              Chưa có lượt truy cập dữ liệu cá nhân nào được ghi nhận.
                             </td>
-                            <td className="py-2.5 px-3 font-bold text-slate-900">{entry.nguoiXem}</td>
-                            <td className="py-2.5 px-3 font-mono font-semibold text-blue-700">{entry.hoSoId}</td>
-                            <td className="py-2.5 px-3 text-slate-700">{entry.lyDo}</td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                        ) : (
+                          personalAccessPagination.pageItems.map((entry) => (
+                            <tr key={entry.id} className="hover:bg-amber-50/30">
+                              <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">
+                                {formatDateTime(entry.thoiDiem)}
+                              </td>
+                              <td className="py-2.5 px-3 font-bold text-slate-900">{entry.nguoiXem}</td>
+                              <td className="py-2.5 px-3 font-mono font-semibold text-blue-700">{entry.hoSoId}</td>
+                              <td className="py-2.5 px-3 text-slate-700">{entry.lyDo}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <PaginationBar
+                    currentPage={personalAccessPagination.currentPage}
+                    totalPages={personalAccessPagination.totalPages}
+                    totalItems={personalAccessPagination.totalItems}
+                    pageSize={personalAccessPagination.pageSize}
+                    startIndex={personalAccessPagination.startIndex}
+                    endIndex={personalAccessPagination.endIndex}
+                    onPageChange={personalAccessPagination.setCurrentPage}
+                    itemLabel="lượt truy cập"
+                  />
                 </div>
               </div>
             </div>

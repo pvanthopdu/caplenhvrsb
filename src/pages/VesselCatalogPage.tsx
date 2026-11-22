@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { UserAccount, Vessel, normalizeStatus } from '../types';
 import { repository } from '../services/repository';
 import { CoastalPageHero } from '../components/CoastalPageHero';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 import {
   Ship,
   AlertTriangle,
@@ -56,6 +57,15 @@ function getDefaultExpireDate(yearsAhead = 1): string {
   return d.toISOString().slice(0, 10);
 }
 
+function formatIsoDateVn(iso?: string): string {
+  if (!iso) return '---';
+  const parts = iso.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+  return iso;
+}
+
 export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUser }) => {
   const [vessels, setVessels] = useState<Vessel[]>(() => repository.getVessels());
   const [searchQuery, setSearchQuery] = useState('');
@@ -88,6 +98,10 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
     ownerName: '',
     ownerPhone: '',
     ownerAddress: '',
+    ownerEmail: '',
+    captainName: '',
+    captainPhone: '',
+    notes: '',
     isActive: true,
   });
 
@@ -156,10 +170,19 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
         v.vesselType.toLowerCase().includes(q) ||
         v.ownerName.toLowerCase().includes(q) ||
         (v.ownerPhone || '').toLowerCase().includes(q) ||
+        (v.ownerEmail || '').toLowerCase().includes(q) ||
+        (v.captainName || '').toLowerCase().includes(q) ||
+        (v.captainPhone || '').toLowerCase().includes(q) ||
+        (v.notes || '').toLowerCase().includes(q) ||
         (v.callSign || '').toLowerCase().includes(q)
       );
     });
   }, [vessels, searchQuery, statusFilter, today]);
+
+  const pagination = usePagination(
+    filteredVessels,
+    `${statusFilter}|${searchQuery.trim().toLowerCase()}`
+  );
 
   const openAddModal = () => {
     setEditingVessel(null);
@@ -186,6 +209,10 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
       ownerName: '',
       ownerPhone: '',
       ownerAddress: '',
+      ownerEmail: '',
+      captainName: '',
+      captainPhone: '',
+      notes: '',
       isActive: true,
     });
     setModalOpen(true);
@@ -216,6 +243,10 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
       ownerName: vessel.ownerName,
       ownerPhone: vessel.ownerPhone || '',
       ownerAddress: vessel.ownerAddress || '',
+      ownerEmail: vessel.ownerEmail || '',
+      captainName: vessel.captainName || '',
+      captainPhone: vessel.captainPhone || '',
+      notes: vessel.notes || '',
       isActive: vessel.isActive !== false,
     });
     setModalOpen(true);
@@ -315,6 +346,10 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
       ownerName,
       ownerPhone: formState.ownerPhone.trim(),
       ownerAddress: formState.ownerAddress.trim() || undefined,
+      ownerEmail: formState.ownerEmail.trim() || undefined,
+      captainName: formState.captainName.trim() || undefined,
+      captainPhone: formState.captainPhone.trim() || undefined,
+      notes: formState.notes.trim() || undefined,
       isActive: formState.isActive,
     };
 
@@ -472,8 +507,9 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
           Không tìm thấy phương tiện VR-SB nào phù hợp với tiêu chí lọc.
         </div>
       ) : (
+        <div className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 tabular-nums">
-          {filteredVessels.map((v) => {
+          {pagination.pageItems.map((v) => {
             const isRegExpired = v.registryExpireDate < today;
             const isLicenseExpired = v.operatingLicenseExpireDate < today;
             const isInactive = v.isActive === false;
@@ -562,31 +598,58 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
                     <div className="flex justify-between gap-2">
                       <span className="text-slate-500">Hạn đăng kiểm:</span>
                       <span className={`font-bold ${isRegExpired ? 'text-red-600' : 'text-slate-900'}`}>
-                        {v.registryExpireDate} {isRegExpired && '(ĐÃ HẾT HẠN)'}
+                        {formatIsoDateVn(v.registryExpireDate)} {isRegExpired && '(HẾT HẠN)'}
                       </span>
                     </div>
-                    <div className="flex justify-between gap-2">
-                      <span className="text-slate-500">Hạn GP hoạt động:</span>
-                      <span
-                        className={`font-bold ${isLicenseExpired ? 'text-red-600' : 'text-slate-900'}`}
-                      >
-                        {v.operatingLicenseExpireDate} {isLicenseExpired && '(HẾT HẠN)'}
-                      </span>
-                    </div>
-                    {hasSecondaryExpired && (
-                      <div className="text-[10px] text-amber-700 font-semibold">
-                        Lưu ý: Bảo hiểm TNDS hoặc GCN ATKT đã hết hạn.
+                    {v.civilInsuranceExpireDate && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-500">Bảo hiểm dân sự:</span>
+                        <span
+                          className={`font-bold ${
+                            v.civilInsuranceExpireDate < today ? 'text-red-600' : 'text-slate-900'
+                          }`}
+                        >
+                          {formatIsoDateVn(v.civilInsuranceExpireDate)}{' '}
+                          {v.civilInsuranceExpireDate < today && '(HẾT HẠN)'}
+                        </span>
                       </div>
                     )}
                     <div className="flex justify-between gap-2">
-                      <span className="text-slate-500">Chủ sở hữu:</span>
+                      <span className="text-slate-500">Chủ tàu:</span>
                       <span
                         title={v.ownerName}
-                        className="font-medium text-slate-800 truncate max-w-[175px]"
+                        className="font-semibold text-slate-800 truncate max-w-[185px] text-right"
                       >
                         {v.ownerName}
                       </span>
                     </div>
+                    {v.captainName && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-500">Thuyền trưởng:</span>
+                        <span className="font-bold text-[#07244d] text-right">
+                          {v.captainName}
+                          {v.captainPhone ? ` · ${v.captainPhone}` : ''}
+                        </span>
+                      </div>
+                    )}
+                    {v.ownerEmail && (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-slate-500">Email:</span>
+                        <span className="font-medium text-blue-700 truncate max-w-[190px] text-right">
+                          {v.ownerEmail}
+                        </span>
+                      </div>
+                    )}
+                    {hasSecondaryExpired && (
+                      <div className="text-[10px] text-amber-700 font-semibold pt-0.5">
+                        Lưu ý: Bảo hiểm TNDS hoặc GCN ATKT đã hết hạn.
+                      </div>
+                    )}
+                    {v.notes && (
+                      <div className="text-[10px] text-slate-600 pt-1 border-t border-slate-200/70 whitespace-pre-line">
+                        {v.notes}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -613,6 +676,20 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
               </div>
             );
           })}
+        </div>
+        <div className="rounded-2xl overflow-hidden border border-[#dce8f7] bg-white empty:hidden">
+          <PaginationBar
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.totalItems}
+            pageSize={pagination.pageSize}
+            startIndex={pagination.startIndex}
+            endIndex={pagination.endIndex}
+            onPageChange={pagination.setCurrentPage}
+            itemLabel="phương tiện"
+            className="border-t-0"
+          />
+        </div>
         </div>
       )}
 
@@ -739,15 +816,49 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
                     />
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Địa chỉ liên hệ</label>
+                    <label className="block font-bold text-slate-700 mb-1">Email chủ phương tiện</label>
                     <input
-                      type="text"
-                      value={formState.ownerAddress}
-                      onChange={(e) => setFormState({ ...formState, ownerAddress: e.target.value })}
-                      placeholder="Đặc khu Lý Sơn, Quảng Ngãi"
+                      type="email"
+                      value={formState.ownerEmail}
+                      onChange={(e) => setFormState({ ...formState, ownerEmail: e.target.value })}
+                      placeholder="email@gmail.com"
                       className="w-full p-2.5 border border-slate-300 rounded-xl"
                     />
                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Tên thuyền trưởng</label>
+                    <input
+                      type="text"
+                      value={formState.captainName}
+                      onChange={(e) => setFormState({ ...formState, captainName: e.target.value })}
+                      placeholder="VD: Lê Tấn Lý"
+                      className="w-full p-2.5 border border-slate-300 rounded-xl font-semibold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">SĐT thuyền trưởng</label>
+                    <input
+                      type="text"
+                      value={formState.captainPhone}
+                      onChange={(e) => setFormState({ ...formState, captainPhone: e.target.value })}
+                      placeholder="09xxxxxxxx"
+                      className="w-full p-2.5 border border-slate-300 rounded-xl"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Địa chỉ liên hệ</label>
+                  <input
+                    type="text"
+                    value={formState.ownerAddress}
+                    onChange={(e) => setFormState({ ...formState, ownerAddress: e.target.value })}
+                    placeholder="Đặc khu Lý Sơn, Quảng Ngãi"
+                    className="w-full p-2.5 border border-slate-300 rounded-xl"
+                  />
                 </div>
               </div>
 
@@ -939,6 +1050,17 @@ export const VesselCatalogPage: React.FC<VesselCatalogPageProps> = ({ currentUse
                       className="w-full p-2.5 border border-slate-300 rounded-xl"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Ghi chú liên hệ / điều hành</label>
+                  <textarea
+                    rows={2}
+                    value={formState.notes}
+                    onChange={(e) => setFormState({ ...formState, notes: e.target.value })}
+                    placeholder="Thông tin giám đốc, điều hành, lưu ý đăng kiểm/bảo hiểm..."
+                    className="w-full p-2.5 border border-slate-300 rounded-xl"
+                  />
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">

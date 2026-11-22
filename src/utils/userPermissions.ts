@@ -149,7 +149,8 @@ export function isTripAccessibleToUser(
 }
 
 /**
- * Kiểm tra hồ sơ cần xử lý gấp theo đúng nhiệm vụ của từng vai trò
+ * Kiểm tra hồ sơ cần xử lý theo đúng nhiệm vụ của từng vai trò (chưa kiểm tra ca trực/bến)
+ * - ADMIN, DEPT_HEAD, LEADER không trực tiếp xử lý hồ sơ chuyến trên ứng dụng (chỉ theo dõi/điều hành/quản trị).
  */
 export function isUrgentTripForUserRole(
   userRole: UserRole,
@@ -162,17 +163,6 @@ export function isUrgentTripForUserRole(
 ): boolean {
   void _evalResult;
   const status = normalizeStatus(trip.status);
-
-  if (userRole === 'ADMIN') {
-    return ![
-      'NHAP',
-      'KHONG_CHAP_THUAN',
-      'THU_HOI',
-      'HET_HIEU_LUC',
-      'DA_RUT',
-      'DA_CAP_BEN',
-    ].includes(status);
-  }
 
   switch (userRole) {
     case 'PORT_STAFF':
@@ -188,21 +178,101 @@ export function isUrgentTripForUserRole(
         'TAM_DUNG_THOI_TIET',
       ].includes(status);
 
-    case 'DEPT_HEAD':
-      // Trưởng phòng theo dõi hồ sơ đang tạm giữ Biên phòng hoặc sắp quá hạn Sở 60p
-      return ['TAM_GIU_BIEN_PHONG', 'CHO_SO_XU_LY', 'OFFICE_TRA_LAI'].includes(status);
-
-    case 'LEADER':
-      return false;
-
     case 'CAPTAIN':
-      return status === 'TRA_CHU_TAU';
+      return status === 'TRA_CHU_TAU' || status === 'NHAP';
 
     case 'BP_CHIHUY':
     case 'BP_TRUC':
       return ['DA_CAP_PHEP', 'TAM_GIU_BIEN_PHONG', 'DA_XUAT_BEN'].includes(status);
 
+    case 'ADMIN':
+    case 'DEPT_HEAD':
+    case 'LEADER':
     default:
       return false;
   }
 }
+
+/**
+ * Xác định bến bắt buộc phải khớp cho thao tác xử lý hiện tại của hồ sơ (nếu vai trò gắn với bến).
+ */
+export function getRequiredPortIdForTripAction(
+  userRole: UserRole,
+  trip: TripRecord
+): PortId | undefined {
+  const status = normalizeStatus(trip.status);
+  if (userRole === 'PORT_STAFF') {
+    if (status === 'CHO_KIEM_TRA' || status === 'TRA_BQL_CANG') {
+      return trip.departurePortId;
+    }
+    return undefined;
+  }
+  if (userRole === 'BP_TRUC' || userRole === 'BP_CHIHUY') {
+    if (status === 'DA_CAP_PHEP' || status === 'TAM_GIU_BIEN_PHONG') {
+      return trip.departurePortId;
+    }
+    if (status === 'DA_XUAT_BEN') {
+      return trip.arrivalPortId;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Kiểm tra chặt chẽ một hồ sơ có phải là NHIỆM VỤ CẦN XỬ LÝ của đúng tài khoản hiện tại hay không:
+ * - Đúng vai trò chịu trách nhiệm ở trạng thái hiện tại (ADMIN / DEPT_HEAD / LEADER => false)
+ * - Đúng bến phụ trách (với BQL Cảng và Biên phòng: bến đi khi kiểm tra/kiểm soát xuất bến, bến đến khi xác nhận cập bến)
+ * - Đang trong ca trực (với BQL Cảng, Chuyên viên, Biên phòng — khi truyền cờ isInActiveShift)
+ */
+export function isTripMyActionTask(
+  user: UserAccount,
+  trip: TripRecord,
+  options?: { isInActiveShift?: boolean }
+): boolean {
+  if (!isUrgentTripForUserRole(user.role, trip)) {
+    return false;
+  }
+
+  const status = normalizeStatus(trip.status);
+
+  if (['PORT_STAFF', 'OFFICER', 'BP_TRUC', 'BP_CHIHUY'].includes(user.role)) {
+    if (options && options.isInActiveShift === false) {
+      return false;
+    }
+  }
+
+  if (user.role === 'PORT_STAFF') {
+    if (status === 'CHO_KIEM_TRA' || status === 'TRA_BQL_CANG') {
+      return isTripAtAssignedDeparturePort(user, trip);
+    }
+    return false;
+  }
+
+  if (user.role === 'BP_TRUC' || user.role === 'BP_CHIHUY') {
+    if (status === 'DA_CAP_PHEP' || status === 'TAM_GIU_BIEN_PHONG') {
+      return isTripAtAssignedDeparturePort(user, trip);
+    }
+    if (status === 'DA_XUAT_BEN') {
+      return isTripAtAssignedArrivalPort(user, trip);
+    }
+    return false;
+  }
+
+  return true;
+}
+
+export const ACTIVE_MONITORING_STATUSES: ReadonlySet<TripStatus> = new Set([
+  'CHO_KIEM_TRA',
+  'TRA_CHU_TAU',
+  'DA_CHAP_THUAN',
+  'CHO_SO_XU_LY',
+  'TRA_BQL_CANG',
+  'TAM_DUNG_THOI_TIET',
+  'DA_DUYET',
+  'DANG_TRINH_OFFICE',
+  'OFFICE_TRA_LAI',
+  'DA_CAP_PHEP',
+  'TAM_GIU_BIEN_PHONG',
+  'DA_XUAT_BEN',
+]);
+

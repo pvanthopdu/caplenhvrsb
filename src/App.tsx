@@ -99,12 +99,6 @@ export default function App() {
     repository.initializeStorage();
     return repository.getActiveBpDemoSession();
   });
-  const [gmailBp2faCode, setGmailBp2faCode] = useState<string>(() =>
-    String(Math.floor(100000 + Math.random() * 900000))
-  );
-  const [gmailBp2faInput, setGmailBp2faInput] = useState<string>('');
-  const [gmailBp2faError, setGmailBp2faError] = useState<string>('');
-  const [gmailBp2faVerified, setGmailBp2faVerified] = useState<boolean>(false);
 
   const [currentPage, setCurrentPage] = useState<string>(() => {
     const activeBp = repository.getActiveBpDemoSession();
@@ -136,6 +130,10 @@ export default function App() {
 
       if (profile.role !== 'UNASSIGNED' && profile.status !== 'LOCKED') {
         repository.setCurrentUser(profile);
+        // Cán bộ Biên phòng đăng nhập thành công bằng email = tự động đăng ca trực
+        if (profile.role === 'BP_TRUC' || profile.role === 'BP_CHIHUY') {
+          repository.ensureBpLoginDutyShift(profile);
+        }
         if (prevRoleRef.current === 'UNASSIGNED' || prevRoleRef.current === null || prevRoleRef.current !== profile.role) {
           setCurrentPage((prev) =>
             prev === 'public-verify' ? prev : repository.getDefaultLandingPageForRole(profile.role)
@@ -424,8 +422,6 @@ export default function App() {
     }
     repository.clearBpDemoSession();
     setBpDemoUser(null);
-    setGmailBp2faVerified(false);
-    setGmailBp2faInput('');
     repository.logout();
     setAuthError('');
     setSelectedTripId(undefined);
@@ -440,6 +436,9 @@ export default function App() {
     setCurrentUser(refreshed);
     if (refreshed.role !== 'UNASSIGNED' && refreshed.status !== 'LOCKED') {
       repository.setCurrentUser(refreshed);
+      if (refreshed.role === 'BP_TRUC' || refreshed.role === 'BP_CHIHUY') {
+        repository.ensureBpLoginDutyShift(refreshed);
+      }
       setCurrentPage(repository.getDefaultLandingPageForRole(refreshed.role));
     }
   };
@@ -527,69 +526,6 @@ export default function App() {
     );
   }
 
-  // Nếu là tài khoản Gmail được phân quyền Biên phòng -> yêu cầu OTP 2 lớp trong phiên
-  const isGmailBpNeeds2fa =
-    Boolean(firebaseUser) &&
-    !bpDemoUser &&
-    (activeSessionUser.role === 'BP_TRUC' || activeSessionUser.role === 'BP_CHIHUY') &&
-    !gmailBp2faVerified &&
-    sessionStorage.getItem(`vrsb_gmail_bp_2fa_${activeSessionUser.id}`) !== 'true';
-
-  if (isGmailBpNeeds2fa) {
-    return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 font-sans">
-        <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 p-6 shadow-xl space-y-4">
-          <h2 className="text-lg font-bold text-slate-900">Xác thực 2 lớp (Biên phòng)</h2>
-          <p className="text-xs text-slate-600">
-            Tài khoản {activeSessionUser.fullName} ({activeSessionUser.email}) yêu cầu mã OTP xác thực 2 lớp trước khi truy cập dữ liệu phối hợp.
-          </p>
-          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-mono font-bold text-amber-950">
-            Mã OTP xác thực 2 lớp (Demo): {gmailBp2faCode}
-          </div>
-          {gmailBp2faError && (
-            <p className="text-xs text-red-700 font-medium">{gmailBp2faError}</p>
-          )}
-          <input
-            type="text"
-            inputMode="numeric"
-            maxLength={6}
-            value={gmailBp2faInput}
-            onChange={(e) => setGmailBp2faInput(e.target.value)}
-            placeholder="Nhập 6 chữ số OTP"
-            className="w-full min-h-[44px] rounded-lg border border-slate-300 px-3 text-center text-lg font-mono font-bold tracking-widest"
-          />
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => void handleLogout()}
-              className="min-h-[44px] px-4 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700"
-            >
-              Đăng xuất
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (gmailBp2faInput.trim() !== gmailBp2faCode) {
-                  setGmailBp2faError('Mã OTP không đúng.');
-                  return;
-                }
-                setGmailBp2faError('');
-                try {
-                  sessionStorage.setItem(`vrsb_gmail_bp_2fa_${activeSessionUser.id}`, 'true');
-                } catch {}
-                setGmailBp2faVerified(true);
-                setGmailBp2faCode(String(Math.floor(100000 + Math.random() * 900000)));
-              }}
-              className="flex-1 min-h-[44px] rounded-lg bg-slate-900 text-white text-sm font-bold"
-            >
-              Xác nhận OTP
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Nếu tài khoản Gmail chưa được quản trị phân quyền hoặc bị khóa -> Chặn toàn bộ thao tác hệ thống
   if (activeSessionUser.role === 'UNASSIGNED' || activeSessionUser.status === 'LOCKED') {
     return (
@@ -625,7 +561,7 @@ export default function App() {
   const currentSelectedTrip = selectedTripId ? repository.getTripById(selectedTripId) : undefined;
 
   return (
-    <div className={`min-h-screen bg-gradient-to-b from-[#edf5fe] via-[#f5f9ff] to-[#e4effc] flex flex-col font-sans text-slate-900 relative transition-all ${largeFontMode ? 'large-font-mode' : ''}`}>
+    <div className={`min-h-screen bg-gradient-to-b from-[#edf5fe] via-[#f5f9ff] to-[#e4effc] flex flex-col font-sans text-slate-900 relative overflow-x-clip transition-all ${largeFontMode ? 'large-font-mode' : ''}`}>
       {/* Nền sóng biển & cảng biển xanh dịu ở cạnh dưới giao diện */}
       <div className="fixed bottom-0 left-0 right-0 pointer-events-none z-0 overflow-hidden print:hidden">
         <svg
@@ -704,7 +640,7 @@ export default function App() {
           onToggleCollapse={handleToggleSidebar}
         />
 
-        <main className="flex-1 p-3 sm:p-5 lg:p-6 pb-20 sm:pb-24 min-w-0 w-full overflow-x-clip transition-all duration-300">
+        <main className="flex-1 p-3 sm:p-5 lg:p-6 pb-24 sm:pb-24 min-w-0 w-full overflow-x-clip transition-all duration-300">
           {currentPage === 'bp-daily-trips' && (
             <BpDailyTripsPage currentUser={activeSessionUser} initialTripId={selectedTripId} />
           )}

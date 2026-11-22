@@ -24,9 +24,74 @@ import { downloadOrderPdf } from '../../utils/exportUtils';
 import { formatDateTime, formatTime } from '../../utils/formatters';
 import { getUserAssignedPortId, normalizeStatus } from '../../utils/userPermissions';
 import { BpDossierReadOnlyModal } from '../../components/bp/BpDossierReadOnlyModal';
+import { PaginationBar, usePagination } from '../../components/PaginationBar';
 
 interface BpAtSeaMonitorPageProps {
   currentUser: UserAccount;
+}
+
+function getSarOnboardManifest(trip: TripRecord) {
+  const control = trip.bpDepartureControl;
+  const checklist = control?.checklist || [];
+  const hasChecklist = checklist.length > 0;
+
+  if (!hasChecklist) {
+    const crew = trip.crewMembers || [];
+    const pax = trip.passengers || [];
+    const paxCount = pax.length > 0 ? pax.length : trip.passengerCount;
+    return {
+      crew,
+      pax,
+      absent: [] as Array<{ fullName: string; roleLabel: string; idNumber?: string }>,
+      crewCount: crew.length,
+      paxCount,
+      totalActual: crew.length + paxCount,
+      totalDeclared: crew.length + paxCount,
+      hasActualControl: false,
+    };
+  }
+
+  const onboardCrewIds = new Set(
+    checklist
+      .filter((i) => i.personType === 'CREW' && (i.isOnboard || i.boarded))
+      .map((i) => i.personId)
+  );
+  const onboardPaxIds = new Set(
+    checklist
+      .filter((i) => i.personType === 'PASSENGER' && (i.isOnboard || i.boarded))
+      .map((i) => i.personId)
+  );
+
+  const crew = (trip.crewMembers || []).filter((c, idx) =>
+    onboardCrewIds.has(c.crewId || `CREW-${idx}`)
+  );
+  const pax = (trip.passengers || []).filter((p, idx) =>
+    onboardPaxIds.has(p.id || `PAX-${idx}`)
+  );
+  const absent = checklist
+    .filter((i) => !(i.isOnboard || i.boarded))
+    .map((i) => ({
+      fullName: i.fullName,
+      roleLabel: i.personType === 'CREW' ? i.positionTitle || 'Thuyền viên' : 'Hành khách',
+      idNumber: i.idNumber,
+    }));
+
+  const crewCount = control?.actualCrewCount ?? crew.length;
+  const paxCount = control?.actualPassengerCount ?? pax.length;
+  const totalActual = control?.actualTotalPeople ?? crewCount + paxCount;
+  const totalDeclared =
+    control?.scheduledTotalPeople ?? (trip.crewMembers?.length || 0) + (trip.passengers?.length || trip.passengerCount);
+
+  return {
+    crew,
+    pax,
+    absent,
+    crewCount,
+    paxCount,
+    totalActual,
+    totalDeclared,
+    hasActualControl: true,
+  };
 }
 
 export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentUser }) => {
@@ -81,6 +146,8 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
       })
       .sort((a, b) => Number(b.isOverdue) - Number(a.isOverdue) || b.elapsedMinutes - a.elapsedMinutes);
   }, [trips, nowMs, bpConfig]);
+
+  const pagination = usePagination(underwayList, currentUser.id);
 
   const unacknowledgedOverdue = useMemo(
     () => underwayList.filter((item) => item.isOverdue && !acknowledgedIds.includes(item.trip.id)),
@@ -139,18 +206,20 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
     try {
       repository.logPersonalDataAccess({
         hoSoId: trip.id,
-        lyDo: 'Xuất danh sách người trên tàu phục vụ tìm kiếm cứu nạn (BP)',
+        lyDo: 'Xuất danh sách người thực tế trên tàu phục vụ tìm kiếm cứu nạn (BP)',
         actor: currentUser,
       });
 
-      const crewRows = (trip.crewMembers || []).map((c, idx) => ({
+      const sar = getSarOnboardManifest(trip);
+
+      const crewRows = sar.crew.map((c, idx) => ({
         STT: idx + 1,
         'Họ và tên': c.fullName,
         'Chức danh': c.positionTitle,
         'Số bằng/Chứng chỉ': c.certNumber,
         'Quốc tịch': c.nationality || 'Việt Nam',
       }));
-      const paxRows = (trip.passengers || []).map((p, idx) => ({
+      const paxRows = sar.pax.map((p, idx) => ({
         STT: idx + 1,
         'Họ và tên': p.fullName,
         'Năm sinh': p.birthYear,
@@ -159,6 +228,13 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
         'Số điện thoại': p.phone,
         'Địa chỉ': p.address,
       }));
+      const absentRows = sar.absent.map((a, idx) => ({
+        STT: idx + 1,
+        'Họ và tên': a.fullName,
+        'Phân loại': a.roleLabel,
+        'CCCD/Chứng chỉ': a.idNumber || '---',
+        'Ghi chú': 'Vắng mặt, không lên tàu khi xuất bến',
+      }));
       const summaryRows = [
         {
           'Mã hồ sơ': trip.tripNumber,
@@ -166,9 +242,11 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
           'Tên tàu': trip.vesselName,
           'Số đăng ký': trip.vesselRegNumber,
           'Tuyến': trip.routeName,
-          'Rời bến lúc': formatDateTime(trip.actualDepartureTime || trip.scheduledDepartureTime),
-          'Tổng thuyền viên': crewRows.length,
-          'Tổng hành khách': paxRows.length > 0 ? paxRows.length : trip.passengerCount,
+          'Giờ xuất bến thực tế': formatDateTime(trip.actualDepartureTime || trip.scheduledDepartureTime),
+          'Thuyền viên thực tế trên tàu': sar.crewCount,
+          'Hành khách thực tế trên tàu': sar.paxCount,
+          'Tổng người thực tế trên tàu (TKCN)': sar.totalActual,
+          'Số người vắng mặt không lên tàu': sar.absent.length,
           'Người xuất': currentUser.fullName,
           'Thời điểm xuất': formatDateTime(new Date().toISOString()),
         },
@@ -176,16 +254,19 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'ThongTinChuyen');
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(crewRows), 'ThuyenVien');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(crewRows), 'ThuyenVienThucTe');
       XLSX.utils.book_append_sheet(
         wb,
         XLSX.utils.json_to_sheet(
           paxRows.length > 0
             ? paxRows
-            : [{ 'Ghi chú': `Chuyến báo cáo ${trip.passengerCount} hành khách.` }]
+            : [{ 'Ghi chú': `Thực tế có ${sar.paxCount} hành khách trên tàu.` }]
         ),
-        'HanhKhach'
+        'HanhKhachThucTe'
       );
+      if (absentRows.length > 0) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(absentRows), 'VangMatKhongLenTau');
+      }
       XLSX.writeFile(wb, `SAR_Danh_sach_nguoi_tren_tau_${trip.tripNumber}.xlsx`);
 
       await downloadOrderPdf(
@@ -195,7 +276,7 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
 
       setBannerMsg({
         type: 'ok',
-        text: `Đã xuất đồng thời Excel & PDF danh sách người trên tàu ${trip.vesselName} (${trip.tripNumber}) và ghi nhật ký truy cập dữ liệu cá nhân.`,
+        text: `Đã xuất đồng thời Excel & PDF danh sách ${sar.totalActual} người thực tế trên tàu ${trip.vesselName} (${trip.tripNumber}) phục vụ TKCN.`,
       });
     } finally {
       setExportingId(null);
@@ -278,9 +359,10 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
       )}
 
       <div className="space-y-3">
-        {underwayList.map(({ trip, depIso, elapsedMinutes, standardMinutes, alertThreshold, isOverdue }) => {
-          const paxCount = trip.passengers?.length > 0 ? trip.passengers.length : trip.passengerCount;
-          const crewCount = trip.crewMembers?.length || 0;
+        {pagination.pageItems.map(({ trip, depIso, elapsedMinutes, standardMinutes, alertThreshold, isOverdue }) => {
+          const sar = getSarOnboardManifest(trip);
+          const paxCount = sar.paxCount;
+          const crewCount = sar.crewCount;
           const canConfirmArrivalHere =
             currentUser.role === 'ADMIN' || !userPort || trip.arrivalPortId === userPort;
 
@@ -341,9 +423,10 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
                   <p className="font-bold text-slate-900 mt-0.5 truncate">{trip.captainName}</p>
                 </div>
                 <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
-                  <p className="text-slate-500">Tổng người trên tàu</p>
+                  <p className="text-slate-500">Người thực tế trên tàu (TKCN)</p>
                   <p className="font-bold font-mono tabular-nums text-slate-900 mt-0.5">
-                    {crewCount} TV + {paxCount} HK = {crewCount + paxCount} người
+                    {crewCount} TV + {paxCount} HK = {sar.totalActual} người
+                    {sar.absent.length > 0 ? ` (vắng ${sar.absent.length})` : ''}
                   </p>
                 </div>
               </div>
@@ -406,12 +489,12 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
                     <p>Phương tiện: <strong>{trip.vesselName} ({trip.vesselRegNumber})</strong></p>
                     <p>Tuyến: <strong>{trip.departurePortName} → {trip.arrivalPortName}</strong></p>
                     <p>Thuyền trưởng: <strong>{trip.captainName}</strong></p>
-                    <p>Giờ rời bến: <strong>{formatDateTime(depIso)}</strong></p>
-                    <p>Người xuất: <strong>{currentUser.fullName}</strong></p>
-                    <p>Thời điểm xuất: <strong>{formatDateTime(new Date().toISOString())}</strong></p>
+                    <p>Giờ xuất bến thực tế: <strong>{formatDateTime(depIso)}</strong></p>
+                    <p>Tổng thực tế trên tàu: <strong>{sar.totalActual} người ({crewCount} TV, {paxCount} HK{sar.absent.length > 0 ? `, vắng ${sar.absent.length}` : ''})</strong></p>
+                    <p>Người xuất: <strong>{currentUser.fullName}</strong> ({formatDateTime(new Date().toISOString())})</p>
                   </div>
                   <div>
-                    <p className="font-bold mb-1">I. DANH SÁCH THUYỀN VIÊN ({crewCount} người)</p>
+                    <p className="font-bold mb-1">I. DANH SÁCH THUYỀN VIÊN THỰC TẾ TRÊN TÀU ({crewCount} người)</p>
                     <table className="w-full border-collapse border border-black text-[11px]">
                       <thead>
                         <tr className="bg-slate-100">
@@ -422,7 +505,7 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
                         </tr>
                       </thead>
                       <tbody>
-                        {(trip.crewMembers || []).map((c, idx) => (
+                        {sar.crew.map((c, idx) => (
                           <tr key={c.crewId || idx}>
                             <td className="border border-black px-2 py-1 text-center">{idx + 1}</td>
                             <td className="border border-black px-2 py-1">{c.fullName}</td>
@@ -434,7 +517,7 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
                     </table>
                   </div>
                   <div>
-                    <p className="font-bold mb-1">II. DANH SÁCH HÀNH KHÁCH ({paxCount} người)</p>
+                    <p className="font-bold mb-1">II. DANH SÁCH HÀNH KHÁCH THỰC TẾ TRÊN TÀU ({paxCount} người)</p>
                     <table className="w-full border-collapse border border-black text-[11px]">
                       <thead>
                         <tr className="bg-slate-100">
@@ -447,7 +530,7 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
                         </tr>
                       </thead>
                       <tbody>
-                        {(trip.passengers || []).map((p, idx) => (
+                        {sar.pax.map((p, idx) => (
                           <tr key={p.id || idx}>
                             <td className="border border-black px-2 py-1 text-center">{idx + 1}</td>
                             <td className="border border-black px-2 py-1">{p.fullName}</td>
@@ -460,6 +543,14 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
                       </tbody>
                     </table>
                   </div>
+                  {sar.absent.length > 0 && (
+                    <div>
+                      <p className="font-bold mb-1">III. NGƯỜI VẮNG MẶT KHÔNG LÊN TÀU ({sar.absent.length} người)</p>
+                      <p className="text-[11px]">
+                        {sar.absent.map((a) => `${a.fullName} (${a.roleLabel}${a.idNumber ? ` · ${a.idNumber}` : ''})`).join('; ')}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -471,6 +562,20 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
             Hiện không có tàu nào đang hành trình trên biển.
           </div>
         )}
+
+        <div className="rounded-xl overflow-hidden border border-slate-200 bg-white empty:hidden">
+          <PaginationBar
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.totalItems}
+            pageSize={pagination.pageSize}
+            startIndex={pagination.startIndex}
+            endIndex={pagination.endIndex}
+            onPageChange={pagination.setCurrentPage}
+            itemLabel="tàu đang chạy"
+            className="border-t-0"
+          />
+        </div>
       </div>
 
       <BpDossierReadOnlyModal

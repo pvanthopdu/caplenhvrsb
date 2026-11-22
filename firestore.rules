@@ -10,6 +10,11 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Deterministic, collision-free invite document ID from normalized lowercase email
+    function emailToInviteId(email) {
+      return email.lower().replace('_', '__').replace('@', '_at_').replace('\\.', '_dot_').replace('\\+', '_plus_');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -37,6 +42,23 @@ service cloud.firestore {
       );
     }
 
+    function isValidRole(role) {
+      return role in [
+        'UNASSIGNED',
+        'ADMIN',
+        'LEADER',
+        'DEPT_HEAD',
+        'OFFICER',
+        'CLERK',
+        'PORT_STAFF',
+        'CAPTAIN',
+        'DUTY_OFFICER',
+        'VERIFIER',
+        'BP_TRUC',
+        'BP_CHIHUY'
+      ];
+    }
+
     function isValidUserDoc(data) {
       return data.keys().hasAll(['uid', 'email', 'fullName', 'role', 'status', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly([
@@ -49,6 +71,7 @@ service cloud.firestore {
           'role',
           'status',
           'assignedVesselIds',
+          'assignedPortId',
           'notes',
           'assignedByEmail',
           'assignedAt',
@@ -59,13 +82,14 @@ service cloud.firestore {
         && isValidId(data.uid)
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
         && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 150
-        && data.role in ['UNASSIGNED', 'ADMIN', 'LEADER', 'DEPT_HEAD', 'OFFICER', 'CLERK', 'PORT_STAFF', 'CAPTAIN', 'DUTY_OFFICER', 'VERIFIER', 'BP_TRUC', 'BP_CHIHUY']
+        && isValidRole(data.role)
         && data.status in ['ACTIVE', 'LOCKED']
         && data.createdAt is timestamp
         && data.updatedAt is timestamp
         && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 500))
         && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
         && (!('department' in data) || (data.department is string && data.department.size() <= 200))
+        && (!('assignedPortId' in data) || (data.assignedPortId is string && data.assignedPortId in ['', 'PORT-01', 'PORT-02']))
         && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
         && (!('assignedByEmail' in data) || (data.assignedByEmail is string && data.assignedByEmail.size() <= 200))
         && (!('assignedAt' in data) || (data.assignedAt is string && data.assignedAt.size() <= 64))
@@ -77,13 +101,63 @@ service cloud.firestore {
         ));
     }
 
+    function isValidGmailInviteDoc(data) {
+      return data.keys().hasAll(['id', 'email', 'fullName', 'role', 'status', 'assignedByEmail', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id',
+          'email',
+          'fullName',
+          'phone',
+          'department',
+          'role',
+          'status',
+          'assignedVesselIds',
+          'assignedPortId',
+          'notes',
+          'assignedByEmail',
+          'assignedAt',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 120
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 150
+        && isValidRole(data.role)
+        && data.status in ['ACTIVE', 'LOCKED']
+        && data.assignedByEmail is string && data.assignedByEmail.size() >= 3 && data.assignedByEmail.size() <= 200
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
+        && (!('department' in data) || (data.department is string && data.department.size() <= 200))
+        && (!('assignedPortId' in data) || (data.assignedPortId is string && data.assignedPortId in ['', 'PORT-01', 'PORT-02']))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
+        && (!('assignedAt' in data) || (data.assignedAt is string && data.assignedAt.size() <= 64))
+        && (!('assignedVesselIds' in data) || (
+          data.assignedVesselIds is list &&
+          data.assignedVesselIds.size() <= 10 &&
+          (data.assignedVesselIds.size() == 0 || (data.assignedVesselIds[0] is string && data.assignedVesselIds[0].size() <= 64))
+        ));
+    }
+
+    function matchesPreAssignedInvite(data) {
+      let inviteId = emailToInviteId(request.auth.token.email);
+      let invitePath = /databases/$(database)/documents/gmail_invites/$(inviteId);
+      return isValidId(inviteId)
+        && exists(invitePath)
+        && get(invitePath).data.email == request.auth.token.email.lower()
+        && data.role == get(invitePath).data.role
+        && data.status == get(invitePath).data.status
+        && (!('assignedVesselIds' in get(invitePath).data) || data.assignedVesselIds == get(invitePath).data.assignedVesselIds)
+        && (!('assignedPortId' in get(invitePath).data) || data.assignedPortId == get(invitePath).data.assignedPortId);
+    }
+
     match /users/{userId} {
       allow get: if isValidId(userId) && isSignedIn() && (request.auth.uid == userId || isAdmin());
 
       // Secure list query: no get()/exists() lookups; non-admins can only list their own uid record
       allow list: if isSignedIn() && (isBootstrapAdmin() || resource.data.uid == request.auth.uid);
 
-      // Users register themselves as UNASSIGNED on first Gmail login; bootstrap admins register as ADMIN
+      // Users register themselves as UNASSIGNED on first Gmail login, or claim a verified admin-created Gmail invite
       allow create: if isValidId(userId)
         && isSignedIn()
         && isValidUserDoc(incoming())
@@ -94,7 +168,8 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           (isBootstrapAdmin() && incoming().role == 'ADMIN' && incoming().status == 'ACTIVE') ||
-          (incoming().role == 'UNASSIGNED' && incoming().status == 'ACTIVE')
+          (incoming().role == 'UNASSIGNED' && incoming().status == 'ACTIVE') ||
+          matchesPreAssignedInvite(incoming())
         );
 
       allow update: if isValidId(userId)
@@ -109,8 +184,8 @@ service cloud.firestore {
             isAdmin() &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'role', 'status', 'department', 'phone', 'assignedVesselIds',
-              'notes', 'assignedByEmail', 'assignedAt', 'updatedAt', 'fullName',
-              'avatar', 'lastLogin'
+              'assignedPortId', 'notes', 'assignedByEmail', 'assignedAt',
+              'updatedAt', 'fullName', 'avatar', 'lastLogin'
             ])
           ) ||
           (
@@ -118,6 +193,16 @@ service cloud.firestore {
             incoming().role == existing().role &&
             incoming().status == existing().status &&
             incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'avatar', 'lastLogin', 'updatedAt'])
+          ) ||
+          (
+            request.auth.uid == userId &&
+            existing().role == 'UNASSIGNED' &&
+            matchesPreAssignedInvite(incoming()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'role', 'status', 'department', 'phone', 'assignedVesselIds',
+              'assignedPortId', 'notes', 'assignedByEmail', 'assignedAt',
+              'fullName', 'avatar', 'lastLogin', 'updatedAt'
+            ])
           )
         );
 
@@ -125,6 +210,53 @@ service cloud.firestore {
         && isAdmin()
         && userId != request.auth.uid
         && !(existing().email.lower() in ['pvtho@pdu.edu.vn', 'pvantho@gmail.com']);
+    }
+
+    match /gmail_invites/{inviteId} {
+      // Only admins or the exact verified Gmail owner can fetch a pre-assignment invite
+      allow get: if isValidId(inviteId)
+        && isSignedIn()
+        && (isAdmin() || inviteId == emailToInviteId(request.auth.token.email));
+
+      // Secure list query: no get()/exists() lookups; non-admins can only list their own email
+      allow list: if isSignedIn() && (
+        isBootstrapAdmin() || resource.data.email == request.auth.token.email.lower()
+      );
+
+      allow create: if isValidId(inviteId)
+        && isSignedIn()
+        && isValidGmailInviteDoc(incoming())
+        && incoming().id == inviteId
+        && incoming().id == emailToInviteId(incoming().email)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAdmin();
+
+      allow update: if isValidId(inviteId)
+        && isSignedIn()
+        && isValidGmailInviteDoc(incoming())
+        && incoming().id == existing().id
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && isAdmin()
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'fullName', 'phone', 'department', 'role', 'status',
+          'assignedVesselIds', 'assignedPortId', 'notes',
+          'assignedByEmail', 'assignedAt', 'updatedAt'
+        ]);
+
+      // Admin can revoke anytime; verified Gmail owner can consume their invite after their users/{uid} exists
+      allow delete: if isValidId(inviteId)
+        && isSignedIn()
+        && (
+          isAdmin() ||
+          (
+            inviteId == emailToInviteId(request.auth.token.email) &&
+            existing().email == request.auth.token.email.lower() &&
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          )
+        );
     }
 
     match /test/{docId} {

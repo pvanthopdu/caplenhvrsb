@@ -46,6 +46,9 @@ import {
   DEFAULT_PORTS,
   DEFAULT_ROUTES,
   DEFAULT_RULES_CONFIG,
+  DEFAULT_VESSELS,
+  OFFICIAL_VRSB_CAPTAINS,
+  buildCaptainsFromVessels,
   createDefaultPhases,
 } from '../config/systemDefaults';
 import {
@@ -58,18 +61,24 @@ import {
 } from '../types/kpi';
 import { DEFAULT_KPI_CONFIG } from './kpiEngine';
 import {
+  getRequiredPortIdForTripAction,
   getUserAccessibleVesselIds,
   getUserAssignedPortId,
   isTripAccessibleToUser,
+  isTripMyActionTask,
   normalizeStatus,
 } from '../utils/userPermissions';
 import { dossierArchiveService } from './dossierArchiveService';
 import { RulesEngine } from './rulesEngine';
 
 const CURRENT_DATA_VERSION = 'vrsb_2026_deploy_v9_spec';
+const VESSEL_CATALOG_VERSION = 'vrsb_vessels_lyson_11_2026_11';
+const CAPTAIN_CATALOG_VERSION = 'vrsb_captains_official_11_2026_11_v2';
 
 const STORAGE_KEYS = {
   DATA_VERSION: 'vrsb_data_version',
+  VESSEL_CATALOG_VERSION: 'vrsb_vessel_catalog_version',
+  CAPTAIN_CATALOG_VERSION: 'vrsb_captain_catalog_version',
   TRIPS: 'vrsb_trips',
   VESSELS: 'vrsb_vessels',
   CREW: 'vrsb_crew',
@@ -114,6 +123,14 @@ export interface ClockMetricsResult {
   isCompleted: boolean;
   isAmber: boolean;
   isRed: boolean;
+}
+
+export interface TripCurrentHandlerInfo {
+  handlerName: string;
+  unitLabel: string;
+  roleDetail: string;
+  shiftName?: string;
+  portName?: string;
 }
 
 class Repository {
@@ -283,12 +300,14 @@ class Repository {
     if (shouldFullInit) {
       try {
         localStorage.setItem(STORAGE_KEYS.DATA_VERSION, CURRENT_DATA_VERSION);
+        localStorage.setItem(STORAGE_KEYS.VESSEL_CATALOG_VERSION, VESSEL_CATALOG_VERSION);
+        localStorage.setItem(STORAGE_KEYS.CAPTAIN_CATALOG_VERSION, CAPTAIN_CATALOG_VERSION);
       } catch {}
 
       this.setItem(STORAGE_KEYS.PORTS, DEFAULT_PORTS);
       this.setItem(STORAGE_KEYS.ROUTES, DEFAULT_ROUTES);
-      this.setItem(STORAGE_KEYS.VESSELS, []);
-      this.setItem(STORAGE_KEYS.CREW, []);
+      this.setItem(STORAGE_KEYS.VESSELS, DEFAULT_VESSELS.map((v) => ({ ...v })));
+      this.setItem(STORAGE_KEYS.CREW, buildCaptainsFromVessels(DEFAULT_VESSELS));
       this.setItem(STORAGE_KEYS.WEATHER, DEFAULT_CURRENT_WEATHER);
       this.setItem(STORAGE_KEYS.RULES, DEFAULT_RULES_CONFIG);
       this.setItem(STORAGE_KEYS.SHIFTS, this.buildDefaultTodayShifts());
@@ -337,6 +356,66 @@ class Repository {
         loai: 'dinh_chi_lenh' as BpStopType,
       }));
       this.setItem(STORAGE_KEYS.BP_DE_NGHI_DUNG, filteredDeNghi);
+    }
+
+    // Xóa danh sách tàu cũ và đồng bộ 11 tàu VR-SB Lý Sơn chuẩn (chạy 1 lần theo phiên bản danh mục)
+    let savedVesselCatalogVersion: string | null = null;
+    try {
+      savedVesselCatalogVersion = localStorage.getItem(STORAGE_KEYS.VESSEL_CATALOG_VERSION);
+    } catch {}
+    if (savedVesselCatalogVersion !== VESSEL_CATALOG_VERSION) {
+      this.setItem(STORAGE_KEYS.VESSELS, DEFAULT_VESSELS.map((v) => ({ ...v })));
+      try {
+        localStorage.setItem(STORAGE_KEYS.VESSEL_CATALOG_VERSION, VESSEL_CATALOG_VERSION);
+      } catch {}
+    }
+
+    // Xóa toàn bộ danh sách thuyền trưởng cũ và tạo mới theo 11 thuyền trưởng VR-SB chuẩn (chạy 1 lần theo phiên bản)
+    let savedCaptainCatalogVersion: string | null = null;
+    try {
+      savedCaptainCatalogVersion = localStorage.getItem(STORAGE_KEYS.CAPTAIN_CATALOG_VERSION);
+    } catch {}
+    if (savedCaptainCatalogVersion !== CAPTAIN_CATALOG_VERSION) {
+      const currentVessels = this.getItem<Vessel[]>(STORAGE_KEYS.VESSELS, DEFAULT_VESSELS);
+      const baseVessels = currentVessels.length > 0 ? currentVessels : DEFAULT_VESSELS.map((v) => ({ ...v }));
+      // Đồng bộ lại tên & SĐT thuyền trưởng trực tiếp trên từng tàu VR-SB tương ứng
+      const syncedVessels = baseVessels.map((v) => {
+        const official = OFFICIAL_VRSB_CAPTAINS.find(
+          (entry) =>
+            entry.vesselId === v.id ||
+            entry.vesselName.trim().toUpperCase() === v.name.trim().toUpperCase()
+        );
+        if (!official) return v;
+        return {
+          ...v,
+          captainName: official.captainName,
+          captainPhone: official.captainPhone,
+        };
+      });
+      this.setItem(STORAGE_KEYS.VESSELS, syncedVessels);
+
+      const existingCrew = this.getItem<CrewMember[]>(STORAGE_KEYS.CREW, []);
+      const isCaptainEntry = (c: CrewMember) =>
+        c.position === 'CAPTAIN' ||
+        (c.positionTitle || '').toLowerCase().includes('thuyền trưởng');
+      const nonCaptainCrew = existingCrew.filter((c) => !isCaptainEntry(c));
+      const rebuiltCaptains = buildCaptainsFromVessels(syncedVessels);
+      this.setItem(STORAGE_KEYS.CREW, [...rebuiltCaptains, ...nonCaptainCrew]);
+      // Đồng bộ lại tài khoản mẫu chủ tàu USR-07 (AN BÌNH 02) nếu còn tên cũ
+      const curUsers = this.getItem<UserAccount[]>(STORAGE_KEYS.USERS_LIST, []);
+      if (curUsers.some((u) => u.id === 'USR-07' && u.fullName === 'Nguyễn Văn Hùng')) {
+        this.setItem(
+          STORAGE_KEYS.USERS_LIST,
+          curUsers.map((u) =>
+            u.id === 'USR-07' && u.fullName === 'Nguyễn Văn Hùng'
+              ? { ...u, fullName: 'Võ Minh Thạch', phone: '0339002376' }
+              : u
+          )
+        );
+      }
+      try {
+        localStorage.setItem(STORAGE_KEYS.CAPTAIN_CATALOG_VERSION, CAPTAIN_CATALOG_VERSION);
+      } catch {}
     }
 
     // Bảo đảm tài khoản mẫu (kể cả pvantho@gmail.com và phân công bến) luôn có
@@ -837,9 +916,16 @@ class Repository {
       STORAGE_KEYS.ADMIN_CONFIG,
       DEFAULT_ADMIN_OPERATIONAL_CONFIG
     );
+    const rawPageSize = Number(
+      saved.paginationPageSize ?? DEFAULT_ADMIN_OPERATIONAL_CONFIG.paginationPageSize ?? 15
+    );
+    const normalizedPageSize = Number.isFinite(rawPageSize)
+      ? Math.min(200, Math.max(5, Math.floor(rawPageSize)))
+      : 15;
     return {
       ...DEFAULT_ADMIN_OPERATIONAL_CONFIG,
       ...saved,
+      paginationPageSize: normalizedPageSize,
       bqlChecklistConfig:
         saved.bqlChecklistConfig && saved.bqlChecklistConfig.length > 0
           ? saved.bqlChecklistConfig
@@ -847,8 +933,20 @@ class Repository {
     };
   }
 
+  public getPaginationPageSize(): number {
+    return this.getAdminConfig().paginationPageSize || 15;
+  }
+
   public saveAdminConfig(config: AdminOperationalConfig, actor?: UserAccount): void {
-    this.setItem(STORAGE_KEYS.ADMIN_CONFIG, config);
+    const normalizedPageSize = Math.min(
+      200,
+      Math.max(5, Math.floor(Number(config.paginationPageSize) || 15))
+    );
+    const payload: AdminOperationalConfig = {
+      ...config,
+      paginationPageSize: normalizedPageSize,
+    };
+    this.setItem(STORAGE_KEYS.ADMIN_CONFIG, payload);
     if (actor) {
       this.addAuditLog({
         userId: actor.id,
@@ -856,7 +954,7 @@ class Repository {
         userRole: actor.role,
         action: 'CẬP_NHẬT_CẤU_HÌNH_VẬN_HÀNH',
         targetType: 'SYSTEM',
-        details: `Cập nhật cấu hình QR thanh toán, mẫu thông báo/giấy phép, checklist 8 nhóm BQL và định mức (${config.bqlProcessingSlaMinutes}/${config.deptProcessingSlaMinutes}/${config.officeUploadSlaMinutes}p).`,
+        details: `Cập nhật cấu hình QR thanh toán, mẫu thông báo/giấy phép, checklist 8 nhóm BQL, định mức (${payload.bqlProcessingSlaMinutes}/${payload.deptProcessingSlaMinutes}/${payload.officeUploadSlaMinutes}p) và phân trang (${normalizedPageSize} bản ghi/trang).`,
       });
     }
     this.emitUserMutation();
@@ -892,6 +990,108 @@ class Repository {
     this.emitUserMutation();
   }
 
+  /**
+   * Tài khoản cán bộ Biên phòng (BP_TRUC / BP_CHIHUY) đăng nhập thành công bằng email
+   * sẽ tự động được ghi nhận là đang đăng ca trực trong ngày.
+   */
+  public ensureBpLoginDutyShift(
+    user?: UserAccount | null,
+    now: Date = new Date()
+  ): DutyShift | undefined {
+    if (!user) return undefined;
+    if (user.role !== 'BP_TRUC' && user.role !== 'BP_CHIHUY') return undefined;
+    if (user.status === 'LOCKED' || user.isActive === false) return undefined;
+
+    const userPort = getUserAssignedPortId(user);
+    const normalizedEmail = (user.email || '').trim().toLowerCase();
+    const shifts = this.getDutyShifts();
+
+    const existing = shifts.find((s) => {
+      if (!this.isTimeInShiftWindow(s, now)) return false;
+      if (s.roleGroup && s.roleGroup !== 'BIEN_PHONG') return false;
+      const matchedIdentity = Boolean(
+        s.assigneeIds?.includes(user.id) ||
+          s.officerId === user.id ||
+          (normalizedEmail &&
+            (s.assigneeIds?.some((id) => id.trim().toLowerCase() === normalizedEmail) ||
+              (s.handoverNote || '').toLowerCase().includes(normalizedEmail)))
+      );
+      if (!matchedIdentity) return false;
+      if (s.portId && userPort && s.portId !== userPort) return false;
+      return true;
+    });
+
+    if (existing) {
+      if (!existing.assigneeIds?.includes(user.id)) {
+        const updated: DutyShift = {
+          ...existing,
+          assigneeIds: Array.from(new Set([...(existing.assigneeIds || []), user.id])),
+          assigneeNames: Array.from(new Set([...(existing.assigneeNames || []), user.fullName])),
+          status: 'ACTIVE',
+        };
+        const nextList = shifts.map((s) => (s.id === existing.id ? updated : s));
+        this.setItem(STORAGE_KEYS.SHIFTS, nextList);
+        return updated;
+      }
+      return existing;
+    }
+
+    const localYear = now.getFullYear();
+    const localMonth = String(now.getMonth() + 1).padStart(2, '0');
+    const localDay = String(now.getDate()).padStart(2, '0');
+    const localDateStr = `${localYear}-${localMonth}-${localDay}`;
+    const hour = now.getHours();
+    const loginTimeStr = `${String(hour).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const shiftType: DutyShift['shiftType'] =
+      hour < 6 ? 'EARLY_MORNING' : hour < 12 ? 'MORNING' : hour < 18 ? 'AFTERNOON' : 'NIGHT';
+
+    const dayStart = new Date(localYear, now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const dayEnd = new Date(localYear, now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const safeUid = (user.id || normalizedEmail || 'bp').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16);
+    const shiftId = `SHIFT-BP-LOGIN-${localDateStr}-${safeUid}`;
+
+    const newShift: DutyShift = {
+      id: shiftId,
+      date: localDateStr,
+      dutyDate: localDateStr,
+      shiftType,
+      shiftName: `Ca trực Biên phòng (Đăng nhập lúc ${loginTimeStr})`,
+      roleGroup: 'BIEN_PHONG',
+      portId: userPort,
+      startTime: loginTimeStr,
+      endTime: '23:59',
+      startAt: dayStart.toISOString(),
+      endAt: dayEnd.toISOString(),
+      assigneeIds: [user.id],
+      assigneeNames: [user.fullName],
+      officerId: user.id,
+      officerName: user.fullName,
+      status: 'ACTIVE',
+      handoverNote: `Tự động đăng ca trực khi cán bộ Biên phòng đăng nhập bằng email (${user.email || user.username}).`,
+    };
+
+    const idx = shifts.findIndex((s) => s.id === shiftId);
+    const nextShifts = [...shifts];
+    if (idx >= 0) nextShifts[idx] = newShift;
+    else nextShifts.unshift(newShift);
+    this.setItem(STORAGE_KEYS.SHIFTS, nextShifts);
+
+    this.addAuditLog({
+      userId: user.id,
+      userName: user.fullName,
+      userRole: user.role,
+      action: 'DANG_CA_TRUC_BIEN_PHONG',
+      targetType: 'SYSTEM',
+      targetId: shiftId,
+      shiftName: newShift.shiftName,
+      details: `Cán bộ Biên phòng ${user.fullName} (${user.email || user.username}) đăng nhập thành công và tự động kích hoạt ca trực${
+        userPort ? ` tại ${userPort === 'PORT-01' ? 'Bến Đảo Lớn' : 'Bến Đảo Bé'}` : ''
+      }.`,
+    });
+
+    return newShift;
+  }
+
   private isTimeInShiftWindow(shift: DutyShift, now: Date): boolean {
     if (shift.startAt && shift.endAt) {
       const s = new Date(shift.startAt).getTime();
@@ -923,15 +1123,18 @@ class Repository {
     const expectedGroup = SHIFT_ROLE_BY_USER_ROLE[user.role];
     if (!expectedGroup) return undefined;
 
+    const normalizedEmail = (user.email || '').trim().toLowerCase();
     const shifts = this.getDutyShifts();
-    return shifts.find((s) => {
+    const matched = shifts.find((s) => {
       if (!this.isTimeInShiftWindow(s, now)) return false;
       if (s.roleGroup && s.roleGroup !== expectedGroup) return false;
       const inAssignees = Boolean(
         s.assigneeIds?.includes(user.id) ||
           s.portStaffId === user.id ||
           s.officerId === user.id ||
-          s.leaderId === user.id
+          s.leaderId === user.id ||
+          (normalizedEmail &&
+            s.assigneeIds?.some((id) => id.trim().toLowerCase() === normalizedEmail))
       );
       if (!inAssignees) return false;
       if (expectedGroup === 'BQL_CANG' || expectedGroup === 'BIEN_PHONG') {
@@ -940,6 +1143,27 @@ class Repository {
       }
       return true;
     });
+
+    if (matched) return matched;
+
+    // Cán bộ Biên phòng đăng nhập thành công bằng email = tự động đăng ca trực
+    if (
+      (user.role === 'BP_TRUC' || user.role === 'BP_CHIHUY') &&
+      user.status !== 'LOCKED' &&
+      user.isActive !== false
+    ) {
+      const activeUser = this.getCurrentUser();
+      const isSignedInUser =
+        !activeUser ||
+        activeUser.id === user.id ||
+        (Boolean(normalizedEmail) &&
+          (activeUser.email || '').trim().toLowerCase() === normalizedEmail);
+      if (isSignedInUser) {
+        return this.ensureBpLoginDutyShift(user, now);
+      }
+    }
+
+    return undefined;
   }
 
   public validateShiftAndPortForAction(
@@ -977,6 +1201,229 @@ class Repository {
     }
 
     return { allowed: true, shift: activeShift };
+  }
+
+  /**
+   * Kiểm tra chặt chẽ một hồ sơ có phải là nhiệm vụ cần xử lý trực tiếp của tài khoản đang đăng nhập hay không
+   * (kiểm tra đồng thời: vai trò, phương tiện/bến phụ trách, và ca trực đang hoạt động).
+   */
+  public isTripMyAction(
+    user: UserAccount,
+    trip: TripRecord,
+    now: Date = new Date()
+  ): boolean {
+    if (user.role === 'CAPTAIN') {
+      const accessibleVesselIds = getUserAccessibleVesselIds(user, this.getVessels(), this.getCrew());
+      if (!isTripAccessibleToUser(user, trip, accessibleVesselIds)) {
+        return false;
+      }
+      return isTripMyActionTask(user, trip);
+    }
+
+    const requiredPortId = getRequiredPortIdForTripAction(user.role, trip);
+    const shiftCheck = this.validateShiftAndPortForAction(user, requiredPortId, now);
+    return isTripMyActionTask(user, trip, { isInActiveShift: shiftCheck.allowed });
+  }
+
+  /**
+   * Xác định Người xử lý hiện tại của một hồ sơ để hiển thị theo dõi trên các hồ sơ liên quan.
+   */
+  public getCurrentTripHandler(
+    trip: TripRecord,
+    now: Date = new Date()
+  ): TripCurrentHandlerInfo {
+    const st = normalizeStatus(trip.status);
+    const allUsers = this.getAllUsers().filter((u) => u.status !== 'LOCKED' && u.isActive !== false);
+    const shifts = this.getDutyShifts();
+
+    const findActiveShiftAssignees = (
+      roleGroup: 'BQL_CANG' | 'CHUYEN_VIEN' | 'BIEN_PHONG',
+      portId?: string
+    ): { names: string[]; shiftName?: string } => {
+      const activeShifts = shifts.filter((s) => {
+        if (!this.isTimeInShiftWindow(s, now)) return false;
+        if (s.roleGroup && s.roleGroup !== roleGroup) return false;
+        if ((roleGroup === 'BQL_CANG' || roleGroup === 'BIEN_PHONG') && portId && s.portId && s.portId !== portId) {
+          return false;
+        }
+        return true;
+      });
+      if (activeShifts.length === 0) return { names: [] };
+
+      const names: string[] = [];
+      activeShifts.forEach((s) => {
+        (s.assigneeNames || []).forEach((n) => {
+          if (n && !names.includes(n)) names.push(n);
+        });
+        if (names.length === 0 && s.assigneeIds && s.assigneeIds.length > 0) {
+          s.assigneeIds.forEach((uid) => {
+            const u = allUsers.find((item) => item.id === uid);
+            if (u?.fullName && !names.includes(u.fullName)) names.push(u.fullName);
+          });
+        }
+      });
+      return { names, shiftName: activeShifts[0]?.shiftName };
+    };
+
+    // 1. Khâu Chủ tàu / Thuyền trưởng
+    if (st === 'NHAP' || st === 'TRA_CHU_TAU') {
+      const captainUser = allUsers.find(
+        (u) => u.role === 'CAPTAIN' && u.assignedVesselIds?.includes(trip.vesselId)
+      );
+      const handlerName =
+        (trip.createdByRole === 'CAPTAIN' && trip.createdByName) ||
+        captainUser?.fullName ||
+        trip.actualDeclarantName ||
+        trip.captainName ||
+        trip.createdByName ||
+        'Chủ tàu / Thuyền trưởng';
+      return {
+        handlerName,
+        unitLabel: 'Chủ tàu / Thuyền trưởng',
+        roleDetail: st === 'TRA_CHU_TAU' ? 'Cần chỉnh sửa & nộp lại hồ sơ' : 'Đang soạn thảo bản nháp',
+      };
+    }
+
+    // 2. Khâu Ban Quản lý Cảng (tại bến đi)
+    if (st === 'CHO_KIEM_TRA' || st === 'TRA_BQL_CANG') {
+      const active = findActiveShiftAssignees('BQL_CANG', trip.departurePortId);
+      const fallbackUsers = allUsers
+        .filter((u) => u.role === 'PORT_STAFF' && getUserAssignedPortId(u) === trip.departurePortId)
+        .map((u) => u.fullName);
+      let handlerName = '';
+      if (active.names.length > 0) {
+        handlerName = active.names.join(', ');
+      } else if (st === 'TRA_BQL_CANG' && trip.portInspection?.inspectorName) {
+        handlerName = trip.portInspection.inspectorName;
+      } else if (fallbackUsers.length > 0) {
+        handlerName = fallbackUsers.join(', ');
+      } else {
+        handlerName = 'Cán bộ trực BQL Cảng';
+      }
+      return {
+        handlerName,
+        unitLabel: 'Ban Quản lý Cảng',
+        roleDetail: `BQL Cảng · ${trip.departurePortName}`,
+        shiftName: active.shiftName,
+        portName: trip.departurePortName,
+      };
+    }
+
+    // 3. Khâu Chuyên viên Phòng ATGT (Sở Xây dựng) & Trình ký Office
+    if (
+      [
+        'DA_CHAP_THUAN',
+        'CHO_SO_XU_LY',
+        'DA_DUYET',
+        'DANG_TRINH_OFFICE',
+        'OFFICE_TRA_LAI',
+        'TAM_DUNG_THOI_TIET',
+      ].includes(st)
+    ) {
+      const active = findActiveShiftAssignees('CHUYEN_VIEN');
+      const incoming = this.getIncomingDossiers().find((d) => d.tripId === trip.id);
+      const specificOfficer =
+        trip.officeSubmissionRecord?.submittedByName ||
+        trip.officeSubmissionRecord?.draftApprovedByName ||
+        trip.deptApprovedByName ||
+        incoming?.assignedOfficerName;
+      const fallbackOfficers = allUsers
+        .filter((u) => u.role === 'OFFICER')
+        .map((u) => u.fullName);
+
+      const handlerName =
+        active.names.length > 0
+          ? active.names.join(', ')
+          : specificOfficer || (fallbackOfficers.length > 0 ? fallbackOfficers.join(', ') : 'Chuyên viên trực Phòng ATGT');
+
+      return {
+        handlerName,
+        unitLabel: st === 'DANG_TRINH_OFFICE' ? 'Phòng ATGT / Lãnh đạo Sở (Office)' : 'Phòng ATGT · Sở Xây dựng',
+        roleDetail:
+          st === 'DANG_TRINH_OFFICE'
+            ? 'Đang trình ký trên Office · Chuyên viên theo dõi tải GP'
+            : st === 'OFFICE_TRA_LAI'
+            ? 'Chuyên viên rà soát sau khi Office trả lại'
+            : 'Chuyên viên Phòng An toàn giao thông',
+        shiftName: active.shiftName,
+      };
+    }
+
+    // 4. Khâu Biên phòng kiểm soát cuối cùng tại bến đi
+    if (st === 'DA_CAP_PHEP' || st === 'TAM_GIU_BIEN_PHONG') {
+      const active = findActiveShiftAssignees('BIEN_PHONG', trip.departurePortId);
+      const bpController = trip.bpDepartureControl?.controllerName || trip.bpDepartureControl?.checkedByName;
+      const fallbackBp = allUsers
+        .filter(
+          (u) =>
+            (u.role === 'BP_TRUC' || u.role === 'BP_CHIHUY') &&
+            getUserAssignedPortId(u) === trip.departurePortId
+        )
+        .map((u) => u.fullName);
+
+      const handlerName =
+        st === 'TAM_GIU_BIEN_PHONG' && bpController
+          ? bpController
+          : active.names.length > 0
+          ? active.names.join(', ')
+          : fallbackBp.length > 0
+          ? fallbackBp.join(', ')
+          : 'Trạm kiểm soát Biên phòng';
+
+      return {
+        handlerName,
+        unitLabel: 'Đồn Biên phòng Lý Sơn',
+        roleDetail: `Kiểm soát tại ${trip.departurePortName}`,
+        shiftName: active.shiftName,
+        portName: trip.departurePortName,
+      };
+    }
+
+    // 5. Khâu Chờ xác nhận cập bến tại đầu bến đến
+    if (st === 'DA_XUAT_BEN') {
+      const activeBp = findActiveShiftAssignees('BIEN_PHONG', trip.arrivalPortId);
+      const activeBql = findActiveShiftAssignees('BQL_CANG', trip.arrivalPortId);
+      const fallbackArrival = allUsers
+        .filter(
+          (u) =>
+            (u.role === 'BP_TRUC' || u.role === 'BP_CHIHUY') &&
+            getUserAssignedPortId(u) === trip.arrivalPortId
+        )
+        .map((u) => u.fullName);
+
+      const handlerName =
+        activeBp.names.length > 0
+          ? activeBp.names.join(', ')
+          : activeBql.names.length > 0
+          ? activeBql.names.join(', ')
+          : fallbackArrival.length > 0
+          ? fallbackArrival.join(', ')
+          : `Trạm Biên phòng / BQL ${trip.arrivalPortName}`;
+
+      return {
+        handlerName,
+        unitLabel: 'Biên phòng / BQL Bến đến',
+        roleDetail: `Chờ xác nhận cập ${trip.arrivalPortName}`,
+        shiftName: activeBp.shiftName || activeBql.shiftName,
+        portName: trip.arrivalPortName,
+      };
+    }
+
+    // 6. Các trạng thái đã kết thúc
+    const lastLog = trip.statusLogs && trip.statusLogs.length > 0
+      ? trip.statusLogs[trip.statusLogs.length - 1]
+      : undefined;
+    const finalName =
+      trip.arrivingConfirmation?.confirmedByName ||
+      trip.officeSubmissionRecord?.revokedByName ||
+      lastLog?.changedByName ||
+      'Hệ thống';
+
+    return {
+      handlerName: finalName,
+      unitLabel: 'Đã kết thúc',
+      roleDetail: 'Hồ sơ đã hoàn thành / đóng',
+    };
   }
 
   // =================== 2 ĐỒNG HỒ XỬ LÝ (BQL 60P & SỞ 60P) ===================
@@ -1255,11 +1702,32 @@ class Repository {
 
   public saveDraftTrip(trip: TripRecord, actor: UserAccount): TripRecord {
     const now = new Date().toISOString();
-    const saved = this.saveTrip({
+    const existing = trip.id ? this.getTripById(trip.id) : undefined;
+    const existingStatus = existing ? normalizeStatus(existing.status) : undefined;
+    // Giữ nguyên trạng thái TRA_CHU_TAU khi Chủ tàu đang chỉnh sửa hồ sơ bị trả lại (tránh auto-save làm mất thông tin trả lại)
+    const preservedStatus: TripStatus =
+      existingStatus === 'TRA_CHU_TAU' ? 'TRA_CHU_TAU' : 'NHAP';
+
+    const merged: TripRecord = {
+      ...(existing || {}),
       ...trip,
-      status: 'NHAP',
+      status: preservedStatus,
+      lastReturnInfo: existing?.lastReturnInfo ?? trip.lastReturnInfo,
+      bqlClock: existing?.bqlClock ?? trip.bqlClock,
+      deptClock: existing?.deptClock ?? trip.deptClock,
+      approvalNotice: existing?.approvalNotice ?? trip.approvalNotice,
+      portInspection: existing?.portInspection ?? trip.portInspection,
+      weatherCheckRecord: existing?.weatherCheckRecord ?? trip.weatherCheckRecord,
+      officeSubmissionRecord: existing?.officeSubmissionRecord ?? trip.officeSubmissionRecord,
+      orderNumber: existing?.orderNumber ?? trip.orderNumber,
+      supersededOrderNumbers: existing?.supersededOrderNumbers ?? trip.supersededOrderNumbers,
+      createdById: existing?.createdById ?? trip.createdById ?? actor.id,
+      createdDate: existing?.createdDate ?? trip.createdDate ?? now.slice(0, 10),
+      submittedAt: existing?.submittedAt ?? trip.submittedAt,
       statusLogs:
-        trip.statusLogs && trip.statusLogs.length > 0
+        (existing?.statusLogs && existing.statusLogs.length > 0
+          ? existing.statusLogs
+          : trip.statusLogs && trip.statusLogs.length > 0
           ? trip.statusLogs
           : [
               {
@@ -1270,16 +1738,18 @@ class Repository {
                 changedByName: actor.fullName,
                 reason: 'Lưu bản nháp hồ sơ đề nghị cấp phép rời cảng.',
               },
-            ],
-    });
+            ]),
+    };
+
+    const saved = this.saveTrip(merged);
     this.addAuditLog({
       userId: actor.id,
       userName: actor.fullName,
       userRole: actor.role,
-      action: 'LƯU_NHÁP_HỒ_SƠ',
+      action: preservedStatus === 'TRA_CHU_TAU' ? 'LƯU_TẠM_HỒ_SƠ_BỊ_TRẢ' : 'LƯU_NHÁP_HỒ_SƠ',
       targetId: saved.id,
       targetType: 'TRIP',
-      details: `Lưu nháp hồ sơ ${saved.tripNumber} (${saved.vesselName}).`,
+      details: `Lưu tạm hồ sơ ${saved.tripNumber} (${saved.vesselName}) ở trạng thái ${preservedStatus}.`,
     });
     return saved;
   }
@@ -1289,16 +1759,36 @@ class Repository {
     actor: UserAccount,
     now: Date = new Date()
   ): { success: boolean; trip?: TripRecord; ruleResults?: RuleCheckResult[]; error?: string } {
-    const vessel = this.getVesselById(tripInput.vesselId);
+    const existing = tripInput.id ? this.getTripById(tripInput.id) : undefined;
+    const mergedInput: TripRecord = {
+      ...(existing || {}),
+      ...tripInput,
+      status: existing ? existing.status : tripInput.status,
+      lastReturnInfo: tripInput.lastReturnInfo ?? existing?.lastReturnInfo,
+      bqlClock: tripInput.bqlClock ?? existing?.bqlClock,
+      deptClock: tripInput.deptClock ?? existing?.deptClock,
+      approvalNotice: tripInput.approvalNotice ?? existing?.approvalNotice,
+      portInspection: tripInput.portInspection ?? existing?.portInspection,
+      weatherCheckRecord: tripInput.weatherCheckRecord ?? existing?.weatherCheckRecord,
+      officeSubmissionRecord: tripInput.officeSubmissionRecord ?? existing?.officeSubmissionRecord,
+      orderNumber: tripInput.orderNumber ?? existing?.orderNumber,
+      supersededOrderNumbers: tripInput.supersededOrderNumbers ?? existing?.supersededOrderNumbers,
+      statusLogs: existing?.statusLogs?.length ? existing.statusLogs : tripInput.statusLogs,
+      createdById: existing?.createdById ?? tripInput.createdById ?? actor.id,
+      createdDate: existing?.createdDate ?? tripInput.createdDate ?? now.toISOString().slice(0, 10),
+      submittedAt: existing?.submittedAt ?? tripInput.submittedAt,
+    };
+
+    const vessel = this.getVesselById(mergedInput.vesselId);
     const weather = this.getWeather();
     const rules = this.getRulesConfig();
     const allTrips = this.getTrips();
     const deNghiDungs = this.getDeNghiDungs();
 
     const evalOut = RulesEngine.evaluateAllRules(
-      tripInput,
+      mergedInput,
       vessel,
-      tripInput.crewMembers || [],
+      mergedInput.crewMembers || [],
       weather,
       allTrips,
       rules,
@@ -1316,12 +1806,12 @@ class Repository {
     }
 
     const nowIso = now.toISOString();
-    const prevStatus = normalizeStatus(tripInput.status);
-    const lastReturn = tripInput.lastReturnInfo;
+    const prevStatus = normalizeStatus(mergedInput.status);
+    const lastReturn = mergedInput.lastReturnInfo;
     let nextStatus: TripStatus = 'CHO_KIEM_TRA';
-    let bqlClock = tripInput.bqlClock;
-    let deptClock = tripInput.deptClock;
-    const updatedTrip: TripRecord = { ...tripInput, rulesCheckResults: ruleResults };
+    let bqlClock = mergedInput.bqlClock;
+    let deptClock = mergedInput.deptClock;
+    const updatedTrip: TripRecord = { ...mergedInput, rulesCheckResults: ruleResults };
 
     if (prevStatus === 'TRA_CHU_TAU' && lastReturn?.benTra === 'CHUYEN_VIEN') {
       // Chuyên viên trả chủ tàu -> Chủ tàu nộp lại đi thẳng về Chuyên viên (CHO_SO_XU_LY), giữ Thông báo BQL nếu đã có
@@ -1368,7 +1858,7 @@ class Repository {
         reason:
           prevStatus === 'TRA_CHU_TAU'
             ? `Chủ tàu/Thuyền trưởng nộp lại hồ sơ sau chỉnh sửa (chuyển về ${
-                nextStatus === 'CHO_SO_XU_LY' ? 'Chuyên viên Sở' : 'Ban Quản lý Cảng'
+                nextStatus === 'CHO_SO_XU_LY' ? 'Chuyên viên Phòng ATGT (Sở Xây dựng)' : 'Ban Quản lý Cảng'
               }).`
             : 'Chủ tàu/Thuyền trưởng nộp hồ sơ điện tử và chứng từ phí rời cảng.',
       },
@@ -1380,8 +1870,12 @@ class Repository {
       this.notifyShiftOrPortUsers(
         'PORT_STAFF',
         saved.departurePortId,
-        `Hồ sơ mới chờ kiểm tra: ${saved.tripNumber}`,
-        `Tàu ${saved.vesselName} (${saved.vesselRegNumber}) vừa nộp hồ sơ rời ${saved.departurePortName}.`,
+        prevStatus === 'TRA_CHU_TAU'
+          ? `Chủ tàu đã sửa & nộp lại hồ sơ: ${saved.tripNumber}`
+          : `Hồ sơ mới chờ kiểm tra: ${saved.tripNumber}`,
+        prevStatus === 'TRA_CHU_TAU'
+          ? `Tàu ${saved.vesselName} (${saved.vesselRegNumber}) đã bổ sung hồ sơ theo yêu cầu và gửi lại BQL Cảng (${saved.departurePortName}).`
+          : `Tàu ${saved.vesselName} (${saved.vesselRegNumber}) vừa nộp hồ sơ rời ${saved.departurePortName}.`,
         'INFO',
         saved.id
       );
@@ -1390,7 +1884,7 @@ class Repository {
         'OFFICER',
         undefined,
         `Chủ tàu đã nộp lại hồ sơ: ${saved.tripNumber}`,
-        `Tàu ${saved.vesselName} vừa bổ sung hồ sơ theo yêu cầu của Chuyên viên.`,
+        `Tàu ${saved.vesselName} vừa bổ sung hồ sơ theo yêu cầu của Chuyên viên Phòng ATGT.`,
         'INFO',
         saved.id
       );
@@ -1485,9 +1979,13 @@ class Repository {
     trip.bqlClock = this.pauseClock(trip.bqlClock, 'TRA_CHU_TAU', nowIso);
     trip.lastReturnInfo = {
       benTra: 'BQL_CANG',
+      benSai: 'CHU_TAU',
+      nhomLoi: 'loi_ho_so',
       phamVi,
       lyDo: reason.trim(),
       thoiDiem: nowIso,
+      traBoiId: actor.id,
+      traBoiName: actor.fullName,
       nguoiTraId: actor.id,
       nguoiTraTen: actor.fullName,
     };
@@ -1602,7 +2100,7 @@ class Repository {
 
     // Đủ điều kiện -> Ra Thông báo chấp thuận (DA_CHAP_THUAN -> CHO_SO_XU_LY), đóng đồng hồ BQL, mở đồng hồ Sở
     const noticeNumber = this.generateNextNoticeNumber();
-    const summaryText = `Đã kiểm tra 8 nhóm điều kiện rời bến tại ${trip.departurePortName}. Thực tế: ${appendix01.actualPassengerCount} hành khách, ${appendix01.actualCargoTons} tấn hàng.`;
+    const summaryText = `Đã kiểm tra thực tế điều kiện an toàn tại bến (Phụ lục 01) ở ${trip.departurePortName}. Thực tế: ${appendix01.actualPassengerCount} hành khách, ${appendix01.actualCargoTons} tấn hàng.`;
     const notice: ApprovalNoticeData = {
       noticeNumber,
       issuedAt: nowIso,
@@ -1654,7 +2152,7 @@ class Repository {
       'OFFICER',
       undefined,
       `Thông báo chấp thuận mới: ${noticeNumber} (${saved.vesselName})`,
-      `BQL Cảng đã hoàn tất kiểm tra 8 nhóm + phí cho hồ sơ ${saved.tripNumber}. Mời Chuyên viên kiểm tra & trình Office.`,
+      `BQL Cảng đã hoàn tất kiểm tra thực tế tại bến (Phụ lục 01) và đối chiếu phí cho hồ sơ ${saved.tripNumber}. Mời Chuyên viên kiểm tra & trình Office.`,
       'INFO',
       saved.id
     );
@@ -1700,6 +2198,26 @@ class Repository {
       conclusion: 'ELIGIBLE',
       notes: note || appendix01.notes,
     };
+    const refreshedSummary = `BQL Cảng đã rà soát, bổ sung kết quả kiểm tra thực tế (Phụ lục 01) tại ${trip.departurePortName}. Thực tế: ${appendix01.actualPassengerCount} hành khách, ${appendix01.actualCargoTons} tấn hàng.`;
+    const noticeNumber = trip.approvalNotice?.noticeNumber || this.generateNextNoticeNumber();
+    trip.approvalNotice = {
+      ...(trip.approvalNotice || {}),
+      noticeNumber,
+      issuedAt: nowIso,
+      approvedAt: nowIso,
+      portId: trip.departurePortId,
+      portName: trip.departurePortName,
+      issuerId: actor.id,
+      issuerName: actor.fullName,
+      issuedById: actor.id,
+      issuedByName: actor.fullName,
+      inspectorName: actor.fullName,
+      checklistSummary: refreshedSummary,
+      conclusionSummary: refreshedSummary,
+      summary: refreshedSummary,
+      feeVerified: appendix01.feeVerified !== false,
+      notes: note || appendix01.notes,
+    };
     trip.deptClock = this.resumeClock(trip.deptClock, nowIso);
     trip.status = 'CHO_SO_XU_LY';
     trip.statusLogs = [
@@ -1710,7 +2228,7 @@ class Repository {
         changedAt: nowIso,
         changedById: actor.id,
         changedByName: actor.fullName,
-        reason: `BQL Cảng bổ sung thông tin và gửi lại Sở Xây dựng: ${note}`,
+        reason: `BQL Cảng bổ sung thông tin (cập nhật Thông báo ${noticeNumber}) và gửi lại Sở Xây dựng: ${note}`,
       },
     ];
     const saved = this.saveTrip(trip);
@@ -1971,7 +2489,7 @@ class Repository {
     tripId: string,
     actor: UserAccount,
     reason: string,
-    phamVi: ReturnScope = 'BO_SUNG_THONG_TIN'
+    phamVi: ReturnScope = 'bo_sung_chung_tu'
   ): { success: boolean; trip?: TripRecord; error?: string } {
     const trip = this.getTripById(tripId);
     if (!trip) return { success: false, error: 'Không tìm thấy hồ sơ chuyến.' };
@@ -1980,11 +2498,11 @@ class Repository {
     if (!shiftCheck.allowed) return { success: false, error: shiftCheck.reason };
 
     const st = normalizeStatus(trip.status);
-    if (!['CHO_SO_XU_LY', 'DA_DUYET', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(st)) {
+    if (!['DA_CHAP_THUAN', 'CHO_SO_XU_LY', 'DA_DUYET', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(st)) {
       return { success: false, error: 'Trạng thái hồ sơ không hợp lệ để Chuyên viên trả Chủ tàu.' };
     }
     if (!reason || reason.trim().length < 5) {
-      return { success: false, error: 'Vui lòng nhập lý do trả Chủ tàu.' };
+      return { success: false, error: 'Vui lòng nhập lý do trả Chủ tàu chi tiết (tối thiểu 5 ký tự).' };
     }
 
     const nowIso = new Date().toISOString();
@@ -1995,9 +2513,13 @@ class Repository {
     trip.deptClock = this.pauseClock(trip.deptClock, 'TRA_CHU_TAU', nowIso);
     trip.lastReturnInfo = {
       benTra: 'CHUYEN_VIEN',
+      benSai: 'CHU_TAU',
+      nhomLoi: 'loi_ho_so',
       phamVi,
       lyDo: reason.trim(),
       thoiDiem: nowIso,
+      traBoiId: actor.id,
+      traBoiName: actor.fullName,
       nguoiTraId: actor.id,
       nguoiTraTen: actor.fullName,
     };
@@ -2009,7 +2531,7 @@ class Repository {
         changedAt: nowIso,
         changedById: actor.id,
         changedByName: actor.fullName,
-        reason: `Chuyên viên Sở trả Chủ tàu (${phamVi}): ${reason.trim()}`,
+        reason: `Chuyên viên Phòng ATGT xác định sai do Chủ tàu → Trả Chủ tàu (${phamVi}): ${reason.trim()}`,
       },
     ];
     const saved = this.saveTrip(trip);
@@ -2017,8 +2539,8 @@ class Repository {
     this.getCaptainRecipientIdsForTrip(saved).forEach((cid) => {
       this.addNotification({
         recipientUserId: cid,
-        title: `Sở Xây dựng trả hồ sơ ${saved.tripNumber}`,
-        message: `Chuyên viên ${actor.fullName} yêu cầu chỉnh sửa: ${reason.trim()}. Sau khi sửa, hồ sơ sẽ gửi thẳng về Chuyên viên Sở.`,
+        title: `Phòng ATGT (Sở Xây dựng) trả hồ sơ ${saved.tripNumber}`,
+        message: `Chuyên viên ${actor.fullName} xác định thiếu sót thuộc hồ sơ Chủ tàu: ${reason.trim()}. Sau khi sửa, hồ sơ sẽ gửi thẳng về Chuyên viên Sở.`,
         type: 'ALERT',
         channel: 'IN_APP',
         tripId: saved.id,
@@ -2034,7 +2556,7 @@ class Repository {
       targetType: 'TRIP',
       beforeValue: st,
       afterValue: 'TRA_CHU_TAU',
-      details: `Trả Chủ tàu (${saved.tripNumber}): ${reason.trim()}`,
+      details: `Xác định sai do Chủ tàu → Trả Chủ tàu (${saved.tripNumber}): ${reason.trim()}`,
     });
 
     return { success: true, trip: saved };
@@ -2043,7 +2565,8 @@ class Repository {
   public returnTripToPortFromDept(
     tripId: string,
     actor: UserAccount,
-    reason: string
+    reason: string,
+    phamVi: ReturnScope = 'bql_sai_kiem_tra_ben'
   ): { success: boolean; trip?: TripRecord; error?: string } {
     const trip = this.getTripById(tripId);
     if (!trip) return { success: false, error: 'Không tìm thấy hồ sơ chuyến.' };
@@ -2052,22 +2575,28 @@ class Repository {
     if (!shiftCheck.allowed) return { success: false, error: shiftCheck.reason };
 
     const st = normalizeStatus(trip.status);
-    if (!['CHO_SO_XU_LY', 'DA_DUYET', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(st)) {
+    if (!['DA_CHAP_THUAN', 'CHO_SO_XU_LY', 'DA_DUYET', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(st)) {
       return { success: false, error: 'Trạng thái hồ sơ không hợp lệ để trả BQL Cảng.' };
     }
     if (!reason || reason.trim().length < 5) {
-      return { success: false, error: 'Vui lòng nhập lý do trả BQL Cảng.' };
+      return { success: false, error: 'Vui lòng nhập lý do trả BQL Cảng chi tiết (tối thiểu 5 ký tự).' };
     }
 
     const nowIso = new Date().toISOString();
     trip.status = 'TRA_BQL_CANG';
     trip.rejectReason = reason.trim();
+    trip.rejectedByRole = actor.role;
+    trip.rejectedByName = actor.fullName;
     trip.deptClock = this.pauseClock(trip.deptClock, 'TRA_BQL_CANG', nowIso);
     trip.lastReturnInfo = {
       benTra: 'CHUYEN_VIEN',
-      phamVi: 'BO_SUNG_THONG_TIN',
+      benSai: 'BQL_CANG',
+      nhomLoi: 'loi_xu_ly',
+      phamVi,
       lyDo: reason.trim(),
       thoiDiem: nowIso,
+      traBoiId: actor.id,
+      traBoiName: actor.fullName,
       nguoiTraId: actor.id,
       nguoiTraTen: actor.fullName,
     };
@@ -2079,7 +2608,7 @@ class Repository {
         changedAt: nowIso,
         changedById: actor.id,
         changedByName: actor.fullName,
-        reason: `Chuyên viên Sở trả lại BQL Cảng: ${reason.trim()}`,
+        reason: `Chuyên viên Phòng ATGT xác định sai do BQL Cảng → Trả lại BQL Cảng (${phamVi}): ${reason.trim()}`,
       },
     ];
     const saved = this.saveTrip(trip);
@@ -2087,8 +2616,8 @@ class Repository {
     this.notifyShiftOrPortUsers(
       'PORT_STAFF',
       saved.departurePortId,
-      `Sở Xây dựng trả hồ sơ ${saved.tripNumber} về BQL Cảng`,
-      `Yêu cầu bổ sung từ ${actor.fullName}: ${reason.trim()}`,
+      `Phòng ATGT trả hồ sơ ${saved.tripNumber} về BQL Cảng`,
+      `Chuyên viên ${actor.fullName} xác định sai sót thuộc BQL Cảng: ${reason.trim()}`,
       'WARNING',
       saved.id
     );
@@ -2102,7 +2631,7 @@ class Repository {
       targetType: 'TRIP',
       beforeValue: st,
       afterValue: 'TRA_BQL_CANG',
-      details: `Trả BQL Cảng (${saved.tripNumber}): ${reason.trim()}`,
+      details: `Xác định sai do BQL Cảng → Trả BQL Cảng (${saved.tripNumber}): ${reason.trim()}`,
     });
 
     return { success: true, trip: saved };
@@ -2576,8 +3105,25 @@ class Repository {
     const vessel = this.getVesselById(trip.vesselId);
     const weather = this.getWeather();
     const rules = this.getRulesConfig();
+
+    const onboardCrewCount = control.checklist.filter(
+      (i) => i.personType === 'CREW' && (i.isOnboard || i.boarded)
+    ).length;
+    const onboardPaxCount = control.checklist.filter(
+      (i) => i.personType === 'PASSENGER' && (i.isOnboard || i.boarded)
+    ).length;
+    const unlistedCount = control.unlistedPeople?.length || 0;
+    const onboardCount = onboardCrewCount + onboardPaxCount + unlistedCount;
+    const listedCount = control.checklist.length;
+    const absentCount = Math.max(0, listedCount - (onboardCrewCount + onboardPaxCount));
+
     const fullControl: BpDepartureControlRecord = {
       ...control,
+      scheduledTotalPeople: control.scheduledTotalPeople ?? listedCount,
+      actualTotalPeople: onboardCount,
+      actualCrewCount: onboardCrewCount,
+      actualPassengerCount: onboardPaxCount,
+      absentCount,
       checkedAt: nowIso,
       controlledAt: control.controlledAt || nowIso,
       checkedById: actor.id,
@@ -2600,18 +3146,21 @@ class Repository {
     );
     const ruleResults = evalOut.results;
 
-    const onboardCount =
-      control.checklist.filter((i) => i.isOnboard || i.boarded).length +
-      (control.unlistedPeople?.length || 0);
-    const listedCount = control.checklist.length;
     this.setItem(STORAGE_KEYS.BP_KIEM_SOAT, [
       {
         id: `KS-${Date.now()}`,
         hoSoId: trip.id,
         soNguoiThucTe: onboardCount,
         soNguoiTheoDanhSach: listedCount,
-        ketQua: onboardCount === listedCount && (control.unlistedPeople?.length || 0) === 0 ? 'khop' : 'chenh_lech',
-        ghiChu: control.anomalyDescription || `Kiểm soát cuối cùng bởi ${actor.fullName}`,
+        ketQua:
+          onboardCount === listedCount && unlistedCount === 0 && !control.crewChanged
+            ? 'khop'
+            : 'chenh_lech',
+        ghiChu:
+          control.anomalyDescription ||
+          (control.crewChanged
+            ? `Đổi thuyền viên: ${control.crewChangeNote || 'Yêu cầu Chủ tàu điều chỉnh'}`
+            : `Kiểm soát cuối cùng bởi ${actor.fullName} (Thực tế ${onboardCount}/${listedCount} người)`),
         nguoiKiemSoat: actor.fullName,
         nguoiKiemSoatId: actor.id,
         thoiDiem: nowIso,
@@ -2619,7 +3168,7 @@ class Repository {
       ...this.getKiemSoatList(),
     ]);
 
-    // 1. Có bất thường an ninh/an toàn -> TAM_GIU_BIEN_PHONG + đình chỉ GP
+    // 1. Có bất thường (buôn lậu, hàng cấm, truy nã, giấy tờ giả, ANTT) -> TAM_GIU_BIEN_PHONG + QR tự chuyển "Tạm đình chỉ"
     if (control.action === 'TAM_GIU_BIEN_PHONG' || control.hasAnomaly) {
       if (!control.anomalyDescription || control.anomalyDescription.trim().length < 5) {
         return { success: false, error: 'Vui lòng mô tả chi tiết bất thường khi lập Tạm giữ / Đình chỉ xuất bến.' };
@@ -2641,7 +3190,7 @@ class Repository {
           changedById: actor.id,
           changedByName: actor.fullName,
           milestone: 'BP_DE_NGHI_DUNG',
-          reason: `Biên phòng TẠM GIỮ / ĐÌNH CHỈ xuất bến (${control.soBienBanNgoai || 'Không số biên bản'}): ${control.anomalyDescription.trim()}`,
+          reason: `Biên phòng TẠM GIỮ xuất bến — Giấy phép chuyển "Tạm đình chỉ" (${control.soBienBanNgoai || 'Không số biên bản'}): ${control.anomalyDescription.trim()}`,
         },
       ];
       const saved = this.saveTrip(trip);
@@ -2664,7 +3213,7 @@ class Repository {
       this.addNotification({
         recipientUserId: 'ROLE:OFFICER',
         title: `🚨 BIÊN PHÒNG TẠM GIỮ TÀU: ${saved.vesselName}`,
-        message: `${actor.fullName} đã tạm giữ và đình chỉ Giấy phép ${saved.orderNumber}. Lý do: ${control.anomalyDescription.trim()}`,
+        message: `${actor.fullName} đã tạm giữ tàu & chuyển QR Giấy phép ${saved.orderNumber} sang "Tạm đình chỉ". Lý do: ${control.anomalyDescription.trim()}. Nếu Biên phòng không gỡ được, Chuyên viên thực hiện Thu hồi Giấy phép.`,
         type: 'ALERT',
         channel: 'IN_APP',
         tripId: saved.id,
@@ -2681,7 +3230,7 @@ class Repository {
         'PORT_STAFF',
         saved.departurePortId,
         `Biên phòng tạm giữ tàu ${saved.vesselName}`,
-        `Hồ sơ ${saved.tripNumber} tạm dừng xuất bến: ${control.anomalyDescription.trim()}`,
+        `Hồ sơ ${saved.tripNumber} tạm dừng xuất bến (QR: Tạm đình chỉ): ${control.anomalyDescription.trim()}`,
         'ALERT',
         saved.id
       );
@@ -2695,17 +3244,20 @@ class Repository {
         targetType: 'TRIP',
         beforeValue: 'DA_CAP_PHEP',
         afterValue: 'TAM_GIU_BIEN_PHONG',
-        details: `Biên phòng tạm giữ tàu ${saved.vesselName}, đình chỉ GP ${saved.orderNumber}.`,
+        details: `Biên phòng tạm giữ tàu ${saved.vesselName}, QR GP ${saved.orderNumber} chuyển Tạm đình chỉ.`,
       });
       return { success: true, trip: saved, ruleResults };
     }
 
-    // 2. Vi phạm R12 (người ngoài danh sách, vượt quân số, đổi thuyền viên) -> Trả Chủ tàu & đình chỉ GP
+    // 2. Vi phạm R12 (người ngoài danh sách, vượt quân số hoặc đổi thuyền viên) -> Trả Chủ tàu điều chỉnh
+    // Luồng sau đó: Chủ tàu điều chỉnh -> BQL Cảng kiểm tra lại (sức chở, áo phao) -> Sở cấp lại GP -> Biên phòng kiểm soát lại
     const r12Violation = ruleResults.find((r) => r.ruleCode === 'R12' && r.status === 'FAILED');
-    if (control.action === 'TRA_CHU_TAU_R12' || r12Violation) {
+    if (control.action === 'TRA_CHU_TAU_R12' || r12Violation || control.crewChanged) {
       const r12Reason =
         r12Violation?.message ||
-        'Phát hiện lệch danh sách người trên tàu (R12) — yêu cầu Chủ tàu khai lại hồ sơ.';
+        (control.crewChanged
+          ? `Phát hiện đổi thuyền viên so với danh sách đã cấp phép${control.crewChangeNote ? `: ${control.crewChangeNote.trim()}` : ''} — yêu cầu Chủ tàu điều chỉnh.`
+          : 'Phát hiện người ngoài danh sách / đổi thuyền viên (R12) — yêu cầu Chủ tàu điều chỉnh.');
       trip.bpDepartureControl = {
         ...fullControl,
         action: 'TRA_CHU_TAU_R12',
@@ -2720,7 +3272,7 @@ class Repository {
       }
       trip.lastReturnInfo = {
         benTra: 'BIEN_PHONG',
-        phamVi: 'SUA_DANH_SACH_NGUOI',
+        phamVi: control.crewChanged ? 'THAY_DOI_THUYEN_VIEN_CHO' : 'SUA_DANH_SACH_NGUOI',
         lyDo: r12Reason,
         thoiDiem: nowIso,
         nguoiTraId: actor.id,
@@ -2736,8 +3288,8 @@ class Repository {
           changedAt: nowIso,
           changedById: actor.id,
           changedByName: actor.fullName,
-          milestone: 'BP_KIEM_SOAT',
-          reason: `[R12] Biên phòng không cho xuất bến và trả Chủ tàu sửa danh sách: ${r12Reason}`,
+          milestone: 'BP_TRA_R12',
+          reason: `[R12] Biên phòng trả Chủ tàu điều chỉnh: ${r12Reason}. Sau khi chỉnh sửa: BQL Cảng kiểm tra lại (sức chở, áo phao) → Sở cấp lại Giấy phép → Biên phòng kiểm soát lại.`,
         },
       ];
       const saved = this.saveTrip(trip);
@@ -2745,8 +3297,8 @@ class Repository {
       this.getCaptainRecipientIdsForTrip(saved).forEach((cid) => {
         this.addNotification({
           recipientUserId: cid,
-          title: `Biên phòng trả hồ sơ do lệch danh sách (R12): ${saved.tripNumber}`,
-          message: `${r12Reason}. Giấy phép cũ đã bị đình chỉ; sau khi sửa danh sách, hồ sơ sẽ kiểm tra lại qua BQL Cảng → Sở.`,
+          title: `Biên phòng trả hồ sơ điều chỉnh (R12): ${saved.tripNumber}`,
+          message: `${r12Reason}. Giấy phép cũ đã bị hủy hiệu lực; sau khi điều chỉnh, Ban Quản lý cảng kiểm tra lại (sức chở, áo phao) → Sở cấp lại Giấy phép → Biên phòng kiểm soát lại.`,
           type: 'ALERT',
           channel: 'IN_APP',
           tripId: saved.id,
@@ -2755,8 +3307,8 @@ class Repository {
 
       this.addNotification({
         recipientUserId: 'ROLE:OFFICER',
-        title: `Cảnh báo R12: GP ${saved.orderNumber} bị tạm đình chỉ`,
-        message: `Biên phòng phát hiện lệch danh sách trên tàu ${saved.vesselName} và đã trả Chủ tàu khai lại.`,
+        title: `Cảnh báo R12: GP ${saved.orderNumber} bị hủy do lệch danh sách / đổi thuyền viên`,
+        message: `Biên phòng đã trả hồ sơ tàu ${saved.vesselName} về Chủ tàu điều chỉnh để BQL Cảng kiểm tra lại và Sở cấp lại Giấy phép.`,
         type: 'WARNING',
         channel: 'IN_APP',
         tripId: saved.id,
@@ -2771,12 +3323,39 @@ class Repository {
         targetType: 'TRIP',
         beforeValue: 'DA_CAP_PHEP',
         afterValue: 'TRA_CHU_TAU',
-        details: `Trả Chủ tàu do R12 (${saved.tripNumber}): ${r12Reason}`,
+        details: `Trả Chủ tàu điều chỉnh do R12 (${saved.tripNumber}): ${r12Reason}`,
       });
       return { success: true, trip: saved, ruleResults };
     }
 
-    // 3. Nếu người lên tàu ít hơn đăng ký (có hành khách vắng mặt), vẫn cho xuất bến (nếu không thuộc R12) nhưng cập nhật số thực tế
+    // 3. Kiểm tra điều kiện Giấy phép hợp lệ (quét QR: có GP, đúng tàu, còn hạn 24h) & đã ghi nhận người trên tàu
+    const qrCheckFailed =
+      !control.qrVerified ||
+      !trip.orderNumber ||
+      (control.permitQrChecks &&
+        (!control.permitQrChecks.hasPermit ||
+          !control.permitQrChecks.matchesVessel ||
+          !control.permitQrChecks.within24h));
+
+    if (qrCheckFailed) {
+      return {
+        success: false,
+        ruleResults,
+        error:
+          'Giấy phép chưa được quét QR xác thực hợp lệ (thiếu Giấy phép, sai phương tiện hoặc quá hạn 24 giờ) — Không cho xuất bến. Chủ tàu phải làm lại thủ tục.',
+      };
+    }
+
+    if (listedCount > 0 && onboardCount <= 0) {
+      return {
+        success: false,
+        ruleResults,
+        error:
+          'Chưa tích có mặt người lên tàu. Vui lòng điểm danh hoặc quét CCCD để hệ thống ghi nhận số người thực tế phục vụ tìm kiếm cứu nạn.',
+      };
+    }
+
+    // 4. Đạt cả 3 nội dung (nếu chỉ có người vắng mặt vẫn cho xuất bến & ghi số thực tế phục vụ TKCN)
     const blockers = ruleResults.filter((r) => r.status === 'FAILED' && r.severity === 'BLOCKING');
     if (blockers.length > 0) {
       return {
@@ -2802,8 +3381,13 @@ class Repository {
         changedAt: nowIso,
         changedById: actor.id,
         changedByName: actor.fullName,
-        milestone: 'BP_KIEM_SOAT',
-        reason: `Biên phòng hoàn tất kiểm soát cuối cùng (${onboardCount} người thực tế trên tàu) — CHO XUẤT BẾN.`,
+        milestone: 'BP_CHO_XUAT_BEN',
+        reason: `Biên phòng hoàn tất kiểm tra 3 nội dung — CHO XUẤT BẾN lúc ${now.toLocaleTimeString('vi-VN', {
+          hour: '2-digit',
+          minute: '2-digit',
+        })}, ghi nhận thực tế ${onboardCount}/${listedCount} người (${onboardCrewCount} TV, ${onboardPaxCount} HK${
+          absentCount > 0 ? `, vắng mặt ${absentCount}` : ''
+        }) phục vụ TKCN.`,
       },
     ];
     const saved = this.saveTrip(trip);
@@ -2812,7 +3396,7 @@ class Repository {
       this.addNotification({
         recipientUserId: cid,
         title: `Biên phòng đã cho xuất bến: ${saved.vesselName}`,
-        message: `Chúc chuyến đi an toàn tuyến ${saved.routeName} (${onboardCount} người trên tàu).`,
+        message: `Chúc chuyến đi an toàn tuyến ${saved.routeName}. Ghi nhận thực tế ${onboardCount} người trên tàu (${onboardCrewCount} TV, ${onboardPaxCount} HK).`,
         type: 'SUCCESS',
         channel: 'IN_APP',
         tripId: saved.id,
@@ -2823,7 +3407,7 @@ class Repository {
       'BP_TRUC',
       saved.arrivalPortId,
       `Tàu sắp đến: ${saved.vesselName} đã rời ${saved.departurePortName}`,
-      `Giấy phép ${saved.orderNumber}, có ${onboardCount} người trên tàu. Đón và xác nhận cập bến khi tàu vào ${saved.arrivalPortName}.`,
+      `Giấy phép ${saved.orderNumber}, thực tế ${onboardCount} người trên tàu (${onboardCrewCount} TV, ${onboardPaxCount} HK). Đón và xác nhận cập bến khi tàu vào ${saved.arrivalPortName}.`,
       'INFO',
       saved.id
     );
@@ -2837,7 +3421,7 @@ class Repository {
       targetType: 'TRIP',
       beforeValue: 'DA_CAP_PHEP',
       afterValue: 'DA_XUAT_BEN',
-      details: `Biên phòng cho xuất bến tàu ${saved.vesselName} (${saved.orderNumber}), thực tế ${onboardCount} người.`,
+      details: `Biên phòng cho xuất bến tàu ${saved.vesselName} (${saved.orderNumber}), thực tế ${onboardCount}/${listedCount} người (${onboardCrewCount} TV, ${onboardPaxCount} HK).`,
     });
 
     return { success: true, trip: saved, ruleResults };
@@ -3176,6 +3760,40 @@ class Repository {
     else list.push(crew);
     this.setItem(STORAGE_KEYS.CREW, list);
     this.emitUserMutation();
+  }
+  public deleteCrew(crewId: string): void {
+    this.setItem(
+      STORAGE_KEYS.CREW,
+      this.getCrew().filter((c) => c.id !== crewId)
+    );
+    this.emitUserMutation();
+  }
+  public syncCaptainsFromVessels(actor?: UserAccount): { removedCount: number; addedCount: number } {
+    const vessels = this.getVessels();
+    const currentCrew = this.getCrew();
+    const isCaptainEntry = (c: CrewMember) =>
+      c.position === 'CAPTAIN' ||
+      (c.positionTitle || '').toLowerCase().includes('thuyền trưởng');
+    const removedCount = currentCrew.filter(isCaptainEntry).length;
+    const nonCaptainCrew = currentCrew.filter((c) => !isCaptainEntry(c));
+    const rebuiltCaptains = buildCaptainsFromVessels(vessels);
+    this.setItem(STORAGE_KEYS.CREW, [...rebuiltCaptains, ...nonCaptainCrew]);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CAPTAIN_CATALOG_VERSION, CAPTAIN_CATALOG_VERSION);
+    } catch {}
+    if (actor) {
+      this.addAuditLog({
+        userId: actor.id,
+        userName: actor.fullName,
+        userRole: actor.role,
+        action: 'DONG_BO_THUYEN_TRUONG_TU_DS_TAU',
+        targetType: 'SYSTEM',
+        targetId: 'CREW_CAPTAINS',
+        details: `${actor.fullName} đã xóa ${removedCount} thuyền trưởng cũ và cập nhật mới ${rebuiltCaptains.length} thuyền trưởng từ danh sách phương tiện VR-SB.`,
+      });
+    }
+    this.emitUserMutation();
+    return { removedCount, addedCount: rebuiltCaptains.length };
   }
 
   public getPorts(): PortLocation[] {

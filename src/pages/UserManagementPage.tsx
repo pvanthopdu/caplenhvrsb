@@ -10,12 +10,18 @@ import {
   SUPER_ADMIN_EMAIL,
   SUPER_ADMIN_EMAILS,
   isSuperAdminEmail,
+  isValidGmailInviteEmail,
   subscribeAllGmailUsers,
+  subscribeAllGmailInvites,
   assignUserPermissions,
+  upsertGmailInvite,
   toggleGmailUserStatus,
+  toggleGmailInviteStatus,
   deleteGmailUser,
+  deleteGmailInvite,
 } from '../services/firebaseAuthService';
 import { formatDateTime, getRoleName } from '../utils/formatters';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 import {
   Users,
   Search,
@@ -29,12 +35,12 @@ import {
   CheckCircle2,
   AlertTriangle,
   Download,
-  Building2,
   Phone,
   Ship,
   X,
   UserCheck,
   UserX,
+  UserPlus,
   Clock,
   Info,
   Mail,
@@ -48,23 +54,25 @@ interface UserManagementPageProps {
 }
 
 export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentUser, onNavigate }) => {
-  const [users, setUsers] = useState<UserAccount[]>([]);
+  const [signedInUsers, setSignedInUsers] = useState<UserAccount[]>([]);
+  const [preAssignedInvites, setPreAssignedInvites] = useState<UserAccount[]>([]);
   const [loadingUsers, setLoadingUsers] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string>('');
   const vessels: Vessel[] = repository.getVessels();
 
   const isSuperAdmin = isSuperAdminEmail(currentUser.email);
+  const canManageUsers = isSuperAdmin || currentUser.role === 'ADMIN';
   const superAdminLabel = SUPER_ADMIN_EMAILS.join(', ');
 
-  // Subscribe to real-time Firestore Gmail users
+  // Subscribe to real-time Firestore Gmail users & pre-assigned Gmail invites
   useEffect(() => {
     setLoadingUsers(true);
     setLoadError('');
-    const unsubscribe = subscribeAllGmailUsers(
+    const unsubUsers = subscribeAllGmailUsers(
       currentUser.email,
       currentUser.uid || currentUser.id,
       (liveUsers) => {
-        setUsers(liveUsers);
+        setSignedInUsers(liveUsers);
         setLoadingUsers(false);
       },
       (err) => {
@@ -76,8 +84,32 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
       }
     );
 
-    return () => unsubscribe();
-  }, [currentUser.email, currentUser.uid, currentUser.id]);
+    const unsubInvites = subscribeAllGmailInvites(
+      currentUser.email,
+      (liveInvites) => {
+        setPreAssignedInvites(liveInvites);
+      },
+      (err) => {
+        console.warn('Could not load pre-assigned Gmail invites:', err);
+      }
+    );
+
+    return () => {
+      unsubUsers();
+      unsubInvites();
+    };
+  }, [currentUser.email, currentUser.uid, currentUser.id, superAdminLabel]);
+
+  // Unified list: active/logged-in users + pre-assigned invites whose email hasn't logged in yet
+  const users = useMemo(() => {
+    const signedInEmails = new Set(
+      signedInUsers.map((u) => (u.email || '').trim().toLowerCase()).filter(Boolean)
+    );
+    const pendingInvites = preAssignedInvites.filter(
+      (inv) => !signedInEmails.has((inv.email || '').trim().toLowerCase())
+    );
+    return [...signedInUsers, ...pendingInvites];
+  }, [signedInUsers, preAssignedInvites]);
 
   // Search & Filter state
   const [searchTerm, setSearchTerm] = useState('');
@@ -85,12 +117,13 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
   // Modal states
+  const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserAccount | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Form states
+  // Form states (shared shape for edit modal)
   const [formData, setFormData] = useState({
     fullName: '',
     email: '',
@@ -103,9 +136,22 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
     notes: '',
   });
 
+  // Form state for Add Pre-Assigned Gmail Modal
+  const [addFormData, setAddFormData] = useState({
+    email: '',
+    role: 'OFFICER' as UserRole,
+    fullName: '',
+    phone: '',
+    department: 'Phòng An toàn giao thông - Sở Xây dựng',
+    assignedVesselIds: [] as string[],
+    assignedPortId: '' as 'PORT-01' | 'PORT-02' | '',
+    notes: '',
+  });
+
   // Alerts & Notifications
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [formError, setFormError] = useState('');
+  const [addFormError, setAddFormError] = useState('');
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setNotification({ type, message });
@@ -127,21 +173,28 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
       const matchRole = roleFilter === 'ALL' || u.role === roleFilter;
       const matchStatus =
         statusFilter === 'ALL' ||
-        (statusFilter === 'ACTIVE' && u.status !== 'LOCKED') ||
+        (statusFilter === 'PRE_ASSIGNED' && Boolean(u.isPreAssigned)) ||
+        (statusFilter === 'ACTIVE' && !u.isPreAssigned && u.status !== 'LOCKED') ||
         (statusFilter === 'LOCKED' && u.status === 'LOCKED');
 
       return matchSearch && matchRole && matchStatus;
     });
   }, [users, searchTerm, roleFilter, statusFilter]);
 
+  const pagination = usePagination(
+    filteredUsers,
+    `${searchTerm.trim().toLowerCase()}|${roleFilter}|${statusFilter}`
+  );
+
   // Statistics
   const stats = useMemo(() => {
     const total = users.length;
-    const unassigned = users.filter((u) => u.role === 'UNASSIGNED').length;
-    const active = users.filter((u) => u.status !== 'LOCKED' && u.role !== 'UNASSIGNED').length;
+    const unassigned = users.filter((u) => !u.isPreAssigned && u.role === 'UNASSIGNED').length;
+    const preAssigned = users.filter((u) => Boolean(u.isPreAssigned)).length;
+    const active = users.filter((u) => !u.isPreAssigned && u.status !== 'LOCKED' && u.role !== 'UNASSIGNED').length;
     const locked = users.filter((u) => u.status === 'LOCKED').length;
     const captains = users.filter((u) => u.role === 'CAPTAIN').length;
-    return { total, unassigned, active, locked, captains };
+    return { total, unassigned, preAssigned, active, locked, captains };
   }, [users]);
 
   const getDefaultDepartmentForRole = (role: UserRole): string => {
@@ -175,6 +228,126 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
     }
   };
 
+  // Open Add Pre-Assigned Gmail Modal
+  const handleOpenAddModal = () => {
+    setAddFormError('');
+    setAddFormData({
+      email: '',
+      role: 'OFFICER',
+      fullName: '',
+      phone: '',
+      department: getDefaultDepartmentForRole('OFFICER'),
+      assignedVesselIds: [],
+      assignedPortId: '',
+      notes: '',
+    });
+    setShowAddModal(true);
+  };
+
+  // Create or Update Pre-Assigned Gmail Account
+  const handleCreateGmailAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddFormError('');
+
+    const normalizedEmail = addFormData.email.trim().toLowerCase();
+    if (!isValidGmailInviteEmail(normalizedEmail)) {
+      setAddFormError('Vui lòng nhập đúng định dạng địa chỉ Gmail / Google Workspace (VD: nguyenvana@gmail.com).');
+      return;
+    }
+
+    if (isSuperAdminEmail(normalizedEmail) && addFormData.role !== 'ADMIN') {
+      setAddFormError(`Tài khoản quản trị gốc (${normalizedEmail}) luôn giữ vai trò Quản trị hệ thống.`);
+      return;
+    }
+
+    const adminEmail = currentUser.email || SUPER_ADMIN_EMAIL;
+    const existingSignedIn = signedInUsers.find(
+      (u) => (u.email || '').trim().toLowerCase() === normalizedEmail
+    );
+
+    setSaving(true);
+    try {
+      const resolvedDepartment =
+        addFormData.department.trim() || getDefaultDepartmentForRole(addFormData.role);
+      const resolvedPortId = ['PORT_STAFF', 'BP_TRUC', 'BP_CHIHUY'].includes(addFormData.role)
+        ? addFormData.assignedPortId
+        : '';
+      const resolvedVesselIds = addFormData.role === 'CAPTAIN' ? addFormData.assignedVesselIds : [];
+
+      if (existingSignedIn) {
+        await assignUserPermissions(
+          existingSignedIn.uid || existingSignedIn.id,
+          {
+            role: addFormData.role,
+            fullName: addFormData.fullName.trim() || existingSignedIn.fullName || normalizedEmail.split('@')[0],
+            department: resolvedDepartment,
+            phone: addFormData.phone.trim() || existingSignedIn.phone || '',
+            assignedVesselIds: resolvedVesselIds,
+            assignedPortId: resolvedPortId,
+            notes: addFormData.notes.trim() || existingSignedIn.notes || '',
+            status: 'ACTIVE',
+          },
+          adminEmail
+        );
+
+        repository.addAuditLog({
+          userId: currentUser.id,
+          userName: currentUser.fullName,
+          userRole: currentUser.role,
+          action: 'PHÂN_QUYỀN_TÀI_KHOẢN_GMAIL',
+          targetType: 'SYSTEM',
+          details: `Cập nhật trực tiếp phân quyền cho Gmail đã đăng nhập ${normalizedEmail} thành ${getRoleName(
+            addFormData.role
+          )} (${addFormData.role}).`,
+        });
+
+        setShowAddModal(false);
+        showToast(
+          'success',
+          `Tài khoản ${normalizedEmail} đã có trong hệ thống — đã cập nhật ngay vai trò "${getRoleName(addFormData.role)}".`
+        );
+      } else {
+        const result = await upsertGmailInvite(
+          {
+            email: normalizedEmail,
+            role: addFormData.role,
+            fullName: addFormData.fullName.trim(),
+            department: resolvedDepartment,
+            phone: addFormData.phone.trim(),
+            assignedVesselIds: resolvedVesselIds,
+            assignedPortId: resolvedPortId,
+            notes: addFormData.notes.trim(),
+            status: 'ACTIVE',
+          },
+          adminEmail
+        );
+
+        repository.addAuditLog({
+          userId: currentUser.id,
+          userName: currentUser.fullName,
+          userRole: currentUser.role,
+          action: 'THÊM_GMAIL_PHÂN_QUYỀN_TRƯỚC',
+          targetType: 'SYSTEM',
+          details: `${result.isUpdate ? 'Cập nhật' : 'Thêm mới'} Gmail phân quyền trước ${normalizedEmail} với vai trò ${getRoleName(
+            addFormData.role
+          )} (${addFormData.role}) tại ${resolvedDepartment}.`,
+        });
+
+        setShowAddModal(false);
+        showToast(
+          'success',
+          `Đã ${result.isUpdate ? 'cập nhật' : 'thêm'} Gmail ${normalizedEmail} (${getRoleName(
+            addFormData.role
+          )}). Người dùng có thể bấm "Đăng nhập bằng Gmail" để vào thẳng hệ thống.`
+        );
+      }
+    } catch (err: any) {
+      setAddFormError(err?.message || 'Không thể lưu tài khoản Gmail. Vui lòng kiểm tra quyền quản trị.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Open Role Assignment / Edit Modal
   const handleOpenEdit = (user: UserAccount) => {
     setSelectedUser(user);
@@ -204,36 +377,58 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
     setShowDeleteModal(true);
   };
 
-  // Save Role Assignment to Firestore
+  // Save Role Assignment to Firestore (works for both active users & pre-assigned Gmail invites)
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser) return;
     setFormError('');
 
-    if (!formData.fullName.trim()) {
+    const trimmedName = formData.fullName.trim();
+    if (!trimmedName && !selectedUser.isPreAssigned) {
       setFormError('Vui lòng nhập họ và tên người dùng.');
       return;
     }
 
-    const targetUid = selectedUser.uid || selectedUser.id;
     setSaving(true);
     try {
-      await assignUserPermissions(
-        targetUid,
-        {
-          role: formData.role,
-          fullName: formData.fullName.trim(),
-          department: formData.department.trim() || getDefaultDepartmentForRole(formData.role),
-          phone: formData.phone.trim(),
-          assignedVesselIds: formData.role === 'CAPTAIN' ? formData.assignedVesselIds : [],
-          assignedPortId: ['PORT_STAFF', 'BP_TRUC', 'BP_CHIHUY'].includes(formData.role)
-            ? formData.assignedPortId
-            : '',
-          notes: formData.notes.trim(),
-          status: formData.status,
-        },
-        currentUser.email || SUPER_ADMIN_EMAIL
-      );
+      const resolvedDepartment = formData.department.trim() || getDefaultDepartmentForRole(formData.role);
+      const resolvedVesselIds = formData.role === 'CAPTAIN' ? formData.assignedVesselIds : [];
+      const resolvedPortId = ['PORT_STAFF', 'BP_TRUC', 'BP_CHIHUY'].includes(formData.role)
+        ? formData.assignedPortId
+        : '';
+
+      if (selectedUser.isPreAssigned) {
+        await upsertGmailInvite(
+          {
+            email: selectedUser.email || formData.email,
+            role: formData.role,
+            fullName: trimmedName,
+            department: resolvedDepartment,
+            phone: formData.phone.trim(),
+            assignedVesselIds: resolvedVesselIds,
+            assignedPortId: resolvedPortId,
+            notes: formData.notes.trim(),
+            status: formData.status,
+          },
+          currentUser.email || SUPER_ADMIN_EMAIL
+        );
+      } else {
+        const targetUid = selectedUser.uid || selectedUser.id;
+        await assignUserPermissions(
+          targetUid,
+          {
+            role: formData.role,
+            fullName: trimmedName,
+            department: resolvedDepartment,
+            phone: formData.phone.trim(),
+            assignedVesselIds: resolvedVesselIds,
+            assignedPortId: resolvedPortId,
+            notes: formData.notes.trim(),
+            status: formData.status,
+          },
+          currentUser.email || SUPER_ADMIN_EMAIL
+        );
+      }
 
       repository.addAuditLog({
         userId: currentUser.id,
@@ -243,7 +438,7 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
         targetType: 'SYSTEM',
         details: `Phân quyền Gmail ${selectedUser.email || selectedUser.fullName} thành vai trò ${getRoleName(
           formData.role
-        )} (${formData.role}) tại ${formData.department}.`,
+        )} (${formData.role}) tại ${resolvedDepartment}.`,
       });
 
       setShowEditModal(false);
@@ -264,10 +459,13 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
       showToast('error', `Không thể khóa tài khoản quản trị hệ thống gốc (${user.email}).`);
       return;
     }
-    const targetUid = user.uid || user.id;
     const nextStatus = user.status === 'LOCKED' ? 'ACTIVE' : 'LOCKED';
     try {
-      await toggleGmailUserStatus(targetUid, nextStatus);
+      if (user.isPreAssigned) {
+        await toggleGmailInviteStatus(user.id, nextStatus);
+      } else {
+        await toggleGmailUserStatus(user.uid || user.id, nextStatus);
+      }
       repository.addAuditLog({
         userId: currentUser.id,
         userName: currentUser.fullName,
@@ -285,18 +483,21 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
     }
   };
 
-  // Delete user profile in Firestore
+  // Delete user profile or pre-assigned invite in Firestore
   const handleConfirmDelete = async () => {
     if (!selectedUser) return;
-    const targetUid = selectedUser.uid || selectedUser.id;
     setSaving(true);
     try {
-      await deleteGmailUser(targetUid);
+      if (selectedUser.isPreAssigned) {
+        await deleteGmailInvite(selectedUser.id);
+      } else {
+        await deleteGmailUser(selectedUser.uid || selectedUser.id);
+      }
       repository.addAuditLog({
         userId: currentUser.id,
         userName: currentUser.fullName,
         userRole: currentUser.role,
-        action: 'XÓA_TÀI_KHOẢN_GMAIL',
+        action: selectedUser.isPreAssigned ? 'THU_HỒI_GMAIL_PHÂN_QUYỀN_TRƯỚC' : 'XÓA_TÀI_KHOẢN_GMAIL',
         targetType: 'SYSTEM',
         details: `Đã xóa hồ sơ phân quyền của ${selectedUser.email} (${selectedUser.fullName}).`,
       });
@@ -314,14 +515,22 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
     const header = ['UID,Họ và tên,Email Gmail,Vai trò,Đơn vị,Số điện thoại,Trạng thái,Đăng nhập gần nhất'];
     const rows = users.map((u) =>
       [
-        `"${u.id}"`,
+        `"${u.isPreAssigned ? 'PRE_ASSIGNED' : u.id}"`,
         `"${u.fullName}"`,
         `"${u.email || ''}"`,
         `"${getRoleName(u.role)}"`,
         `"${u.department}"`,
         `"${u.phone || ''}"`,
-        `"${u.status === 'LOCKED' ? 'Đã khóa' : u.role === 'UNASSIGNED' ? 'Chờ phân quyền' : 'Đang hoạt động'}"`,
-        `"${u.lastLogin || ''}"`,
+        `"${
+          u.status === 'LOCKED'
+            ? 'Đã khóa'
+            : u.isPreAssigned
+            ? 'Chờ đăng nhập lần đầu'
+            : u.role === 'UNASSIGNED'
+            ? 'Chờ phân quyền'
+            : 'Đang hoạt động'
+        }"`,
+        `"${u.lastLogin || 'Chưa đăng nhập'}"`,
       ].join(',')
     );
 
@@ -398,7 +607,7 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
       {/* HEADER QUẢN TRỊ PHÂN QUYỀN GMAIL */}
       <CoastalPageHero
         title="Phân quyền Tài khoản Đăng nhập Gmail"
-        subtitle={`Quản trị hệ thống (${superAdminLabel}) kiểm duyệt và phân quyền cho các tài khoản sau khi người dùng đăng nhập xác thực bằng Gmail.`}
+        subtitle={`Quản trị hệ thống (${superAdminLabel}) thêm tài khoản phân quyền trước theo Gmail hoặc duyệt phân quyền sau khi người dùng đăng nhập.`}
         icon={<Users className="w-7 h-7" />}
         badge={
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/20 text-white border border-white/30 text-[11px] font-bold">
@@ -406,15 +615,29 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
           </span>
         }
         rightContent={
-          <button
-            onClick={handleExportCSV}
-            disabled={users.length === 0}
-            className="px-4 py-2.5 text-xs font-extrabold bg-white hover:bg-blue-50 disabled:opacity-50 text-[#072b61] rounded-full transition flex items-center gap-2 shadow-sm cursor-pointer"
-            title="Xuất danh sách sang Excel/CSV"
-          >
-            <Download className="w-4 h-4 text-[#0d62e8]" />
-            <span>Xuất CSV</span>
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {canManageUsers && (
+              <button
+                type="button"
+                onClick={handleOpenAddModal}
+                className="px-4 py-2.5 text-xs font-extrabold bg-[#fde047] hover:bg-[#facc15] text-[#07244d] rounded-full transition flex items-center gap-2 shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+                title="Thêm địa chỉ Gmail và phân quyền trước để người dùng đăng nhập vào thẳng hệ thống"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Thêm tài khoản Gmail</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleExportCSV}
+              disabled={users.length === 0}
+              className="px-4 py-2.5 text-xs font-extrabold bg-white hover:bg-blue-50 disabled:opacity-50 text-[#072b61] rounded-full transition flex items-center gap-2 shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+              title="Xuất danh sách sang Excel/CSV"
+            >
+              <Download className="w-4 h-4 text-[#0d62e8]" />
+              <span>Xuất CSV</span>
+            </button>
+          </div>
         }
       />
 
@@ -459,7 +682,7 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4 tabular-nums">
         <div className="bg-white/95 p-4 rounded-[20px] border border-[#dce8f7] shadow-[0_10px_28px_-14px_rgba(10,60,130,0.16)] flex items-center justify-between">
           <div>
-            <p className="text-[11px] font-bold text-[#526c93] uppercase tracking-wider">Tổng Gmail đã vào</p>
+            <p className="text-[11px] font-bold text-[#526c93] uppercase tracking-wider">Tổng tài khoản Gmail</p>
             <p className="text-2xl font-black text-[#07244d] mt-0.5">{stats.total}</p>
           </div>
           <div className="w-10 h-10 rounded-xl bg-[#edf4fe] text-[#0d62e8] flex items-center justify-center">
@@ -484,9 +707,26 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
           </div>
         </div>
 
+        <div
+          onClick={() => setStatusFilter(statusFilter === 'PRE_ASSIGNED' ? 'ALL' : 'PRE_ASSIGNED')}
+          className={`p-4 rounded-[20px] border shadow-[0_10px_28px_-14px_rgba(10,60,130,0.16)] flex items-center justify-between cursor-pointer transition ${
+            statusFilter === 'PRE_ASSIGNED'
+              ? 'bg-sky-50 border-sky-400'
+              : 'bg-white/95 border-[#dce8f7] hover:bg-[#f4f8ff]'
+          }`}
+        >
+          <div>
+            <p className="text-[11px] font-bold text-[#526c93] uppercase tracking-wider">Cấp trước theo Gmail</p>
+            <p className="text-2xl font-black text-sky-600 mt-0.5">{stats.preAssigned}</p>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-600 flex items-center justify-center">
+            <Mail className="w-5 h-5" />
+          </div>
+        </div>
+
         <div className="bg-white/95 p-4 rounded-[20px] border border-[#dce8f7] shadow-[0_10px_28px_-14px_rgba(10,60,130,0.16)] flex items-center justify-between">
           <div>
-            <p className="text-[11px] font-bold text-[#526c93] uppercase tracking-wider">Đã cấp quyền</p>
+            <p className="text-[11px] font-bold text-[#526c93] uppercase tracking-wider">Đã kích hoạt</p>
             <p className="text-2xl font-black text-emerald-600 mt-0.5">{stats.active}</p>
           </div>
           <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -494,20 +734,13 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
           </div>
         </div>
 
-        <div className="bg-white/95 p-4 rounded-[20px] border border-[#dce8f7] shadow-[0_10px_28px_-14px_rgba(10,60,130,0.16)] flex items-center justify-between">
-          <div>
-            <p className="text-[11px] font-bold text-[#526c93] uppercase tracking-wider">Tài khoản bị khóa</p>
-            <p className="text-2xl font-black text-rose-600 mt-0.5">{stats.locked}</p>
-          </div>
-          <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
-            <UserX className="w-5 h-5" />
-          </div>
-        </div>
-
         <div className="sm:col-span-2 lg:col-span-1 bg-white/95 p-4 rounded-[20px] border border-[#dce8f7] shadow-[0_10px_28px_-14px_rgba(10,60,130,0.16)] flex items-center justify-between">
           <div>
-            <p className="text-[11px] font-bold text-[#526c93] uppercase tracking-wider">Thuyền trưởng</p>
-            <p className="text-2xl font-black text-[#0d62e8] mt-0.5">{stats.captains}</p>
+            <p className="text-[11px] font-bold text-[#526c93] uppercase tracking-wider">Thuyền trưởng / Khóa</p>
+            <p className="text-2xl font-black text-[#0d62e8] mt-0.5">
+              {stats.captains}
+              <span className="text-sm font-bold text-rose-600 ml-1.5">/ {stats.locked}</span>
+            </p>
           </div>
           <div className="w-10 h-10 rounded-xl bg-[#edf4fe] text-[#0d62e8] flex items-center justify-center">
             <Ship className="w-5 h-5" />
@@ -562,6 +795,7 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
             >
               <option value="ALL">Tất cả trạng thái</option>
               <option value="ACTIVE">Đang hoạt động</option>
+              <option value="PRE_ASSIGNED">Chờ đăng nhập lần đầu ({stats.preAssigned})</option>
               <option value="LOCKED">Đã bị khóa</option>
             </select>
           </div>
@@ -616,6 +850,7 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
             </p>
           </div>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[900px] text-left text-xs text-slate-700">
               <thead className="bg-[#edf4fe] text-[#07244d] uppercase text-[10px] font-extrabold border-b border-[#dce8f7]">
@@ -631,18 +866,25 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredUsers.map((user) => {
-                  const isCurrent = (user.uid || user.id) === (currentUser.uid || currentUser.id);
+                {pagination.pageItems.map((user) => {
+                  const isPreAssigned = Boolean(user.isPreAssigned);
+                  const isCurrent = !isPreAssigned && (user.uid || user.id) === (currentUser.uid || currentUser.id);
                   const isSuperAdminRow = isSuperAdminEmail(user.email);
                   const isLocked = user.status === 'LOCKED';
-                  const isUnassigned = user.role === 'UNASSIGNED';
+                  const isUnassigned = !isPreAssigned && user.role === 'UNASSIGNED';
                   const assignedVessels = vessels.filter((v) => user.assignedVesselIds?.includes(v.id));
 
                   return (
                     <tr
-                      key={user.id}
+                      key={`${isPreAssigned ? 'inv-' : 'usr-'}${user.id}`}
                       className={`hover:bg-slate-50/80 transition ${
-                        isLocked ? 'bg-slate-50/50 opacity-80' : isUnassigned ? 'bg-amber-50/40' : ''
+                        isLocked
+                          ? 'bg-slate-50/50 opacity-80'
+                          : isUnassigned
+                          ? 'bg-amber-50/40'
+                          : isPreAssigned
+                          ? 'bg-sky-50/35'
+                          : ''
                       }`}
                     >
                       {/* Người dùng */}
@@ -657,14 +899,20 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
                                 className="w-9 h-9 rounded-full object-cover border border-slate-200 shadow-2xs"
                               />
                             ) : (
-                              <div className="w-9 h-9 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs shadow-2xs">
-                                {user.fullName.charAt(0)}
+                              <div
+                                className={`w-9 h-9 rounded-full text-white font-bold flex items-center justify-center text-xs shadow-2xs ${
+                                  isPreAssigned ? 'bg-sky-600' : 'bg-blue-600'
+                                }`}
+                              >
+                                {user.fullName.charAt(0).toUpperCase()}
                               </div>
                             )}
                             <span
                               className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 border-2 border-white rounded-full ${
                                 isLocked
                                   ? 'bg-red-600'
+                                  : isPreAssigned
+                                  ? 'bg-sky-500'
                                   : isUnassigned
                                   ? 'bg-amber-500'
                                   : 'bg-emerald-500'
@@ -672,7 +920,7 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
                             />
                           </div>
                           <div>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="font-bold text-slate-900 text-xs sm:text-sm">
                                 {user.fullName}
                               </span>
@@ -687,8 +935,8 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
                                 </span>
                               )}
                             </div>
-                            <span className="text-[10px] font-mono text-slate-400 truncate max-w-[160px] block">
-                              UID: {user.id}
+                            <span className="text-[10px] font-mono text-slate-400 truncate max-w-[180px] block">
+                              {isPreAssigned ? 'Cấp trước qua Gmail' : `UID: ${user.id}`}
                             </span>
                           </div>
                         </div>
@@ -749,17 +997,22 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
                       {/* Trạng thái */}
                       <td className="py-3 px-3 text-center">
                         {isLocked ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-100 text-red-800 border border-red-200">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-red-100 text-red-800 border border-red-200 whitespace-nowrap">
                             <Lock className="w-2.5 h-2.5" />
                             Đã khóa
                           </span>
+                        ) : isPreAssigned ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-100 text-sky-900 border border-sky-300 whitespace-nowrap">
+                            <Mail className="w-2.5 h-2.5" />
+                            Chờ đăng nhập lần đầu
+                          </span>
                         ) : isUnassigned ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300 whitespace-nowrap">
                             <Clock className="w-2.5 h-2.5" />
                             Chờ phân quyền
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
                             <CheckCircle2 className="w-2.5 h-2.5" />
                             Hoạt động
                           </span>
@@ -768,7 +1021,9 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
 
                       {/* Đăng nhập gần nhất */}
                       <td className="py-3 px-3 text-[11px] text-slate-500 whitespace-nowrap">
-                        {user.lastLogin ? (
+                        {isPreAssigned ? (
+                          <span className="text-sky-700 italic">Chưa đăng nhập</span>
+                        ) : user.lastLogin ? (
                           <div className="flex items-center gap-1">
                             <Clock className="w-3 h-3 text-slate-400" />
                             <span>{formatDateTime(user.lastLogin)}</span>
@@ -825,6 +1080,17 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
               </tbody>
             </table>
           </div>
+          <PaginationBar
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.totalItems}
+            pageSize={pagination.pageSize}
+            startIndex={pagination.startIndex}
+            endIndex={pagination.endIndex}
+            onPageChange={pagination.setCurrentPage}
+            itemLabel="tài khoản"
+          />
+          </>
         )}
       </div>
 
@@ -832,16 +1098,18 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
       <div className="p-4 bg-blue-50/70 border border-blue-200 rounded-2xl flex items-start gap-3 text-xs text-blue-900">
         <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
         <div className="space-y-1">
-          <p className="font-bold">Chính sách xác thực Gmail & Phân quyền Cấp lệnh VR-SB:</p>
+          <p className="font-bold">Chính sách xác thực Gmail &amp; Phân quyền Cấp lệnh VR-SB:</p>
           <p className="text-blue-800">
-            • Tất cả người dùng đăng nhập trực tiếp bằng <strong>tài khoản Gmail</strong> thông qua Google Authentication.
+            • <strong>Phân quyền trước theo Gmail:</strong> Quản trị viên bấm <strong>Thêm tài khoản Gmail</strong>, chỉ cần nhập địa chỉ Gmail và chọn vai trò. Khi người dùng đăng nhập bằng đúng Gmail đó lần đầu, hệ thống tự động kích hoạt vào thẳng đúng phân quyền mà không cần tạo mật khẩu riêng.
           </p>
           <p className="text-blue-800">
-            • Tài khoản mới đăng nhập lần đầu có vai trò mặc định là <strong>Chưa phân quyền (UNASSIGNED)</strong> và bị
-            chặn toàn bộ chức năng cho đến khi Quản trị hệ thống (<strong className="font-mono">{superAdminLabel}</strong>) cấp vai trò.
+            • <strong>Cán bộ Biên phòng đăng nhập = Đăng ca trực:</strong> Tài khoản có vai trò <strong>Cán bộ trực Biên phòng</strong> hoặc <strong>Chỉ huy Biên phòng</strong> đăng nhập thành công bằng Gmail sẽ tự động kích hoạt ca trực trong ngày để thực hiện ngay công tác kiểm soát xuất bến / cập bến.
           </p>
           <p className="text-blue-800">
-            • Mọi thao tác phân quyền, khóa và xóa tài khoản đều được lưu vào{' '}
+            • <strong>Duyệt sau khi đăng nhập:</strong> Tài khoản Gmail chưa được khai báo trước khi đăng nhập lần đầu sẽ có vai trò mặc định <strong>Chờ phân quyền (UNASSIGNED)</strong> cho đến khi Quản trị hệ thống (<strong className="font-mono">{superAdminLabel}</strong>) cấp vai trò.
+          </p>
+          <p className="text-blue-800">
+            • Mọi thao tác thêm, phân quyền, khóa và xóa tài khoản đều được lưu vào{' '}
             <button
               onClick={() => onNavigate('admin')}
               className="font-bold underline hover:text-blue-950 cursor-pointer"
@@ -852,6 +1120,237 @@ export const UserManagementPage: React.FC<UserManagementPageProps> = ({ currentU
           </p>
         </div>
       </div>
+
+      {/* ============================================================== */}
+      {/* MODAL: THÊM TÀI KHOẢN & PHÂN QUYỀN TRƯỚC THEO GMAIL */}
+      {/* ============================================================== */}
+      {showAddModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-gmail-account-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !saving) {
+              setShowAddModal(false);
+            }
+          }}
+        >
+          <div className="bg-white rounded-3xl max-w-xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white z-10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 id="add-gmail-account-title" className="text-base font-extrabold text-slate-900">
+                    Thêm tài khoản &amp; Phân quyền trước theo Gmail
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Chỉ cần nhập địa chỉ Gmail và chọn vai trò — người dùng đăng nhập Google sẽ vào thẳng hệ thống
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+                aria-label="Đóng"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateGmailAccount} className="p-6 space-y-4 text-xs">
+              {addFormError && (
+                <div className="p-3 bg-red-50 border border-red-300 rounded-xl text-red-800 flex items-center gap-2 font-medium">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{addFormError}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Địa chỉ Gmail (Bắt buộc) */}
+                <div className="sm:col-span-2">
+                  <label htmlFor="preassign-gmail-input" className="block text-slate-700 font-bold mb-1">
+                    Địa chỉ Gmail / Google Workspace <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      id="preassign-gmail-input"
+                      type="email"
+                      required
+                      autoFocus
+                      value={addFormData.email}
+                      onChange={(e) => {
+                        setAddFormData({ ...addFormData, email: e.target.value });
+                        if (addFormError) setAddFormError('');
+                      }}
+                      placeholder="VD: nguyenvana@gmail.com"
+                      className="w-full pl-9 pr-3 py-2.5 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Lưu ý: Địa chỉ này cần là tài khoản Google hợp lệ để người dùng đăng nhập qua nút &quot;Đăng nhập bằng tài khoản Gmail&quot;.
+                  </p>
+                </div>
+
+                {/* Vai trò phân quyền (Bắt buộc) */}
+                <div className="sm:col-span-2">
+                  <label htmlFor="preassign-role-select" className="block text-slate-700 font-bold mb-1">
+                    Vai trò phân quyền <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="preassign-role-select"
+                    value={addFormData.role}
+                    onChange={(e) => {
+                      const nextRole = e.target.value as UserRole;
+                      setAddFormData({
+                        ...addFormData,
+                        role: nextRole,
+                        department: getDefaultDepartmentForRole(nextRole),
+                        assignedPortId: ['PORT_STAFF', 'BP_TRUC', 'BP_CHIHUY'].includes(nextRole)
+                          ? addFormData.assignedPortId || 'PORT-01'
+                          : '',
+                        assignedVesselIds: nextRole === 'CAPTAIN' ? addFormData.assignedVesselIds : [],
+                      });
+                    }}
+                    className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
+                  >
+                    <option value="CAPTAIN">Thuyền trưởng / Chủ tàu (CAPTAIN)</option>
+                    <option value="PORT_STAFF">Nhân viên Ban QL Cảng (PORT_STAFF)</option>
+                    <option value="OFFICER">Chuyên viên Phòng ATGT (OFFICER)</option>
+                    <option value="DEPT_HEAD">Trưởng phòng ATGT (DEPT_HEAD)</option>
+                    <option value="LEADER">Lãnh đạo Sở Xây dựng (LEADER)</option>
+                    <option value="CLERK">Văn thư Sở Xây dựng (CLERK)</option>
+                    <option value="DUTY_OFFICER">Cán bộ trực ngoài giờ (DUTY_OFFICER)</option>
+                    <option value="BP_TRUC">Cán bộ trực Biên phòng (BP_TRUC)</option>
+                    <option value="BP_CHIHUY">Chỉ huy Đồn Biên phòng (BP_CHIHUY)</option>
+                    <option value="VERIFIER">Người xác thực - Đồn Biên phòng (VERIFIER)</option>
+                    <option value="ADMIN">Quản trị hệ thống (ADMIN)</option>
+                  </select>
+                </div>
+
+                {/* Gán bến phụ trách nếu là BQL Cảng hoặc Biên phòng */}
+                {['PORT_STAFF', 'BP_TRUC', 'BP_CHIHUY'].includes(addFormData.role) && (
+                  <div className="sm:col-span-2 p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-2">
+                    <label className="block text-emerald-950 font-bold">
+                      Bến phụ trách — Gắn phạm vi kiểm tra/kiểm soát tại bến
+                    </label>
+                    <select
+                      value={addFormData.assignedPortId}
+                      onChange={(e) =>
+                        setAddFormData({
+                          ...addFormData,
+                          assignedPortId: e.target.value as 'PORT-01' | 'PORT-02' | '',
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-emerald-300 bg-white rounded-xl text-xs font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    >
+                      <option value="">-- Chưa gán bến cụ thể --</option>
+                      <option value="PORT-01">Bến Đảo Lớn (Lý Sơn) — PORT-01</option>
+                      <option value="PORT-02">Bến Đảo Bé (An Bình) — PORT-02</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Gán phương tiện nếu là thuyền trưởng */}
+                {addFormData.role === 'CAPTAIN' && (
+                  <div className="sm:col-span-2 p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
+                    <label className="block text-amber-900 font-bold">Phương tiện thủy VR-SB phụ trách</label>
+                    <select
+                      value={addFormData.assignedVesselIds[0] || ''}
+                      onChange={(e) =>
+                        setAddFormData({
+                          ...addFormData,
+                          assignedVesselIds: e.target.value ? [e.target.value] : [],
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-amber-300 bg-white rounded-xl text-xs font-semibold focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    >
+                      <option value="">-- Chưa gán tàu cụ thể --</option>
+                      {vessels.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name} ({v.regNumber}) • {v.maxPassengers} khách • Chủ tàu: {v.ownerName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Các thông tin bổ sung (Tùy chọn) */}
+                <div className="sm:col-span-2 pt-2 border-t border-slate-100">
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Thông tin bổ sung (tùy chọn — có thể để trống, hệ thống tự điền mặc định)
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">Họ và tên (tùy chọn)</label>
+                  <input
+                    type="text"
+                    value={addFormData.fullName}
+                    onChange={(e) => setAddFormData({ ...addFormData, fullName: e.target.value })}
+                    placeholder="Để trống sẽ tự lấy từ Google"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">Số điện thoại (tùy chọn)</label>
+                  <input
+                    type="tel"
+                    value={addFormData.phone}
+                    onChange={(e) => setAddFormData({ ...addFormData, phone: e.target.value })}
+                    placeholder="VD: 0912345678"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">Đơn vị công tác</label>
+                  <input
+                    type="text"
+                    value={addFormData.department}
+                    onChange={(e) => setAddFormData({ ...addFormData, department: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">Ghi chú quản trị</label>
+                  <input
+                    type="text"
+                    value={addFormData.notes}
+                    onChange={(e) => setAddFormData({ ...addFormData, notes: e.target.value })}
+                    placeholder="VD: Cán bộ mới nhận nhiệm vụ..."
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(false)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold rounded-xl cursor-pointer"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold rounded-xl shadow-xs transition cursor-pointer flex items-center gap-2"
+                >
+                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
+                  <span>Thêm &amp; Cấp quyền</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ============================================================== */}
       {/* MODAL: PHÂN QUYỀN & CHỈNH SỬA TÀI KHOẢN GMAIL */}

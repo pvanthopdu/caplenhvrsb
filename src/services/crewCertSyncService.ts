@@ -257,7 +257,7 @@ export function evaluateCrewMemberCertificate(
       hasPreviouslySubmitted,
       isExpired: false,
       isExpiringSoon,
-      reasonText: `Đã tải lên chứng chỉ mới tại Bước 5 (${step5Doc.fileName}) • Còn hạn đến ${formatDate(effectiveExpireDate)}.`,
+      reasonText: `Đã tải lên giấy chứng nhận (${step5Doc.fileName}) • Còn hạn đến ${formatDate(effectiveExpireDate)} — Đã lưu để tự động đọc lại cho các chuyến sau.`,
       matchedCatalogCrew: matchedCatalog,
       reusableAttachment,
       currentStep5Doc: step5Doc,
@@ -277,7 +277,7 @@ export function evaluateCrewMemberCertificate(
       hasPreviouslySubmitted: true,
       isExpired: false,
       isExpiringSoon,
-      reasonText: `Chứng chỉ đã nộp trước đó và còn hạn đến ${formatDate(effectiveExpireDate)} — Hệ thống tự động dùng lại.`,
+      reasonText: `Hệ thống đã có giấy chứng nhận (còn hạn đến ${formatDate(effectiveExpireDate)}) — Tự động đọc lại, không cần cung cấp lại.`,
       matchedCatalogCrew: matchedCatalog,
       reusableAttachment,
       currentStep5Doc: step5Doc,
@@ -298,8 +298,8 @@ export function evaluateCrewMemberCertificate(
       isExpired: true,
       isExpiringSoon: false,
       reasonText: effectiveExpireDate
-        ? `Chứng chỉ đã hết hạn ngày ${formatDate(effectiveExpireDate)} — Không thể dùng lại. Yêu cầu Thuyền trưởng cập nhật hạn mới & tải lên PDF/Ảnh ở Bước 5.`
-        : 'Chưa có ngày hết hạn chứng chỉ hợp lệ — Yêu cầu Thuyền trưởng cung cấp ở Bước 5.',
+        ? `Giấy chứng nhận đã hết hạn ngày ${formatDate(effectiveExpireDate)} — Vui lòng cập nhật hạn mới & tải ảnh/file PDF mới ngay tại Bước 2 (hoặc Bước 5).`
+        : 'Chưa có ngày hết hạn giấy chứng nhận hợp lệ — Vui lòng bổ sung và tải ảnh/file PDF.',
       matchedCatalogCrew: matchedCatalog,
       reusableAttachment,
       currentStep5Doc: step5Doc,
@@ -319,7 +319,7 @@ export function evaluateCrewMemberCertificate(
     isExpired: false,
     isExpiringSoon,
     reasonText:
-      'Chưa có chứng chỉ nộp trước đó trên hệ thống (thuyền viên mới hoặc số bằng mới) — Yêu cầu Thuyền trưởng tải lên PDF/Ảnh ở Bước 5.',
+      'Hệ thống chưa có giấy chứng nhận lưu trước đó — Vui lòng tải ảnh hoặc file PDF giấy chứng nhận ngay tại Bước 2 (hoặc Bước 5).',
     matchedCatalogCrew: matchedCatalog,
     reusableAttachment,
     currentStep5Doc: step5Doc,

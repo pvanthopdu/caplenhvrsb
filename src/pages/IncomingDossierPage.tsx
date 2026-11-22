@@ -10,6 +10,7 @@ import { formatDateTime, getStatusInfo } from '../utils/formatters';
 import { normalizeStatus } from '../utils/userPermissions';
 import { TripTimelineTree } from '../components/TripTimelineTree';
 import { OfficialFormsModal } from '../components/OfficialFormsModal';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 import heroSeaportImg from '../assets/images/hero_seaport_panorama_1795076039376.jpg';
 import {
   Inbox,
@@ -119,6 +120,11 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
       return true;
     });
   }, [dossiers, statusFilter, sourceFilter, searchTerm]);
+
+  const pagination = usePagination(
+    filteredDossiers,
+    `${statusFilter}|${sourceFilter}|${searchTerm.trim().toLowerCase()}`
+  );
 
   // Quyền hạn tiếp nhận vào sổ: Chỉ Chuyên viên/Nhân viên hoặc Quản trị viên
   const canIntake = currentUser.role === 'OFFICER' || currentUser.role === 'ADMIN';
@@ -513,7 +519,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
               Không tìm thấy hồ sơ đến nào phù hợp với bộ lọc
             </div>
           ) : (
-            filteredDossiers.map((dossier) => {
+            pagination.pageItems.map((dossier) => {
               const linkedTrip = repository.getTripById(dossier.tripId);
               const deptClock = linkedTrip
                 ? repository.computeDeptClockMinutes(linkedTrip, currentTime)
@@ -672,7 +678,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredDossiers.map((dossier) => {
+                pagination.pageItems.map((dossier) => {
                   const linkedTrip = repository.getTripById(dossier.tripId);
                   const deptClock = linkedTrip
                     ? repository.computeDeptClockMinutes(linkedTrip, currentTime)
@@ -857,6 +863,17 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
             </tbody>
           </table>
         </div>
+
+        <PaginationBar
+          currentPage={pagination.currentPage}
+          totalPages={pagination.totalPages}
+          totalItems={pagination.totalItems}
+          pageSize={pagination.pageSize}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setCurrentPage}
+          itemLabel="hồ sơ đến"
+        />
       </div>
 
       {/* Modal: Tiếp nhận & Vào sổ hồ sơ đến */}

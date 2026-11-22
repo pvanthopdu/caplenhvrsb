@@ -1002,9 +1002,9 @@ export const OfficialFormsModal: React.FC<OfficialFormsModalProps> = ({
                             Đối chiếu danh sách thuyền viên với danh bạ thuyền viên
                           </td>
                           <td className="border border-slate-900 py-1 px-2 text-center font-bold">
-                            {pi?.checkCrewRosterMatch === false ? '' : ''}
+                            {pi?.checkCrewRosterMatch !== false ? 'X' : ''}
                           </td>
-                          <td className="border border-slate-900 py-1 px-2 text-center font-bold">
+                          <td className="border border-slate-900 py-1 px-2 text-center font-bold text-red-700">
                             {pi?.checkCrewRosterMatch === false ? 'X' : ''}
                           </td>
                           <td className="border border-slate-900 py-1 px-2"></td>

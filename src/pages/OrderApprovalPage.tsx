@@ -11,6 +11,7 @@ import { normalizeStatus } from '../utils/userPermissions';
 import { DigitalOrderA4 } from '../components/DigitalOrderA4';
 import { CoastalPageHero } from '../components/CoastalPageHero';
 import { OfficialFormsModal } from '../components/OfficialFormsModal';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 import {
   FileBadge,
   CheckCircle2,
@@ -117,6 +118,11 @@ export const OrderApprovalPage: React.FC<OrderApprovalPageProps> = ({
       );
     });
   }, [baseList, searchTerm]);
+
+  const pagination = usePagination(
+    filteredList,
+    `${activeListTab}|${searchTerm.trim().toLowerCase()}`
+  );
 
   const trip: TripRecord | undefined = useMemo(() => {
     const exact = trips.find((t) => t.id === selectedTripId);
@@ -283,7 +289,7 @@ export const OrderApprovalPage: React.FC<OrderApprovalPageProps> = ({
                 )}
               </div>
             ) : (
-              filteredList.map((item) => {
+              pagination.pageItems.map((item) => {
                 const isSelected = trip?.id === item.id;
                 const itemCanonical = normalizeStatus(item.status);
                 const itemStatus = getStatusInfo(itemCanonical);
@@ -358,6 +364,17 @@ export const OrderApprovalPage: React.FC<OrderApprovalPageProps> = ({
               })
             )}
           </div>
+          <PaginationBar
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.totalItems}
+            pageSize={pagination.pageSize}
+            startIndex={pagination.startIndex}
+            endIndex={pagination.endIndex}
+            onPageChange={pagination.setCurrentPage}
+            itemLabel="hồ sơ"
+            compact
+          />
         </aside>
 
         {/* CỘT PHẢI: CHI TIẾT GIÁM SÁT & BẢN XEM TRƯỚC A4 */}

@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { DutyShift, PortId, ShiftRoleGroup, UserAccount } from '../types';
 import { repository } from '../services/repository';
 import { CoastalPageHero } from '../components/CoastalPageHero';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 import { formatDate } from '../utils/formatters';
 import {
   CalendarCheck,
@@ -187,6 +188,11 @@ export const DutySchedulePage: React.FC<{ currentUser: UserAccount }> = ({ curre
       })
       .sort((a, b) => getShiftDate(b).localeCompare(getShiftDate(a)));
   }, [shifts, groupFilter, portFilter, statusFilter, searchQuery]);
+
+  const pagination = usePagination(
+    filteredShifts,
+    `${groupFilter}|${portFilter}|${statusFilter}|${searchQuery.trim().toLowerCase()}`
+  );
 
   const stats = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -560,7 +566,7 @@ export const DutySchedulePage: React.FC<{ currentUser: UserAccount }> = ({ curre
           </div>
         ) : (
           <div className="divide-y divide-[#eef4fc]">
-            {filteredShifts.map((s) => {
+            {pagination.pageItems.map((s) => {
               const g = inferRoleGroup(s);
               const groupMeta = ROLE_GROUP_META[g];
               const statusKey: ShiftStatus = s.status || 'SCHEDULED';
@@ -660,6 +666,16 @@ export const DutySchedulePage: React.FC<{ currentUser: UserAccount }> = ({ curre
             })}
           </div>
         )}
+        <PaginationBar
+          currentPage={pagination.currentPage}
+          totalPages={pagination.totalPages}
+          totalItems={pagination.totalItems}
+          pageSize={pagination.pageSize}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setCurrentPage}
+          itemLabel="ca trực"
+        />
       </div>
 
       {/* MODAL TẠO / SỬA CA TRỰC */}

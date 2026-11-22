@@ -171,7 +171,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Trạng thái ca trực trên thanh điều hướng */}
           {isShiftRole && (
             <div
-              className={`hidden xl:inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold rounded-full border whitespace-nowrap shrink-0 ${
+              className={`hidden lg:inline-flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 text-[11px] font-bold rounded-full border whitespace-nowrap shrink-0 ${
                 activeShift
                   ? 'bg-emerald-500/20 text-emerald-100 border-emerald-300/40'
                   : 'bg-amber-500/25 text-amber-100 border-amber-300/50'
@@ -184,7 +184,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Clock className="w-3.5 h-3.5 shrink-0" />
               <span>{activeShift ? 'Đang trong ca' : 'Ngoài ca (Chỉ xem)'}</span>
-              {assignedPortLabel && <span className="opacity-85">• {assignedPortLabel}</span>}
+              {assignedPortLabel && <span className="hidden xl:inline opacity-85">• {assignedPortLabel}</span>}
             </div>
           )}
 

@@ -491,6 +491,14 @@ export const TripDetailPage: React.FC<TripDetailPageProps> = ({
                 </strong>
               </p>
               <div className="flex flex-wrap gap-2 mt-1.5 text-[11px] text-rose-800">
+                {trip.lastReturnInfo?.benSai && (
+                  <span className="px-2 py-0.5 rounded bg-rose-100 border border-rose-300 text-rose-950 font-black">
+                    Xác định bên sai:{' '}
+                    {trip.lastReturnInfo.benSai === 'BQL_CANG'
+                      ? 'Ban Quản lý Cảng'
+                      : 'Chủ tàu / Thuyền trưởng'}
+                  </span>
+                )}
                 {trip.lastReturnInfo?.phamVi && (
                   <span className="px-2 py-0.5 rounded bg-white border border-rose-200 font-bold">
                     Phạm vi sửa: {getReturnScopeLabel(trip.lastReturnInfo.phamVi)}
@@ -573,7 +581,7 @@ export const TripDetailPage: React.FC<TripDetailPageProps> = ({
                 className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs sm:text-sm font-black flex items-center gap-2 transition cursor-pointer shadow-sm"
               >
                 <ClipboardCheck className="w-4 h-4" />
-                Kiểm tra bến (8 nhóm) &amp; Thông báo
+                Kiểm tra bến (Phụ lục 01) &amp; Thông báo
               </button>
             )}
 

@@ -9,8 +9,9 @@ import { repository } from '../services/repository';
 import { fileStorageService } from '../services/fileStorageService';
 import { CoastalPageHero } from '../components/CoastalPageHero';
 import { DocumentPreviewModal } from '../components/DocumentPreviewModal';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 import { getCaptainAssignedVesselId } from '../utils/userPermissions';
-import { maskIdNumber, maskPhone } from '../utils/formatters';
+import { maskIdNumber } from '../utils/formatters';
 import {
   Users,
   AlertTriangle,
@@ -27,6 +28,8 @@ import {
   X,
   Check,
   Loader2,
+  RefreshCw,
+  Trash2,
 } from 'lucide-react';
 
 interface CrewCatalogPageProps {
@@ -58,9 +61,12 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
   const [vessels, setVessels] = useState<Vessel[]>(() => repository.getVessels());
   const [searchQuery, setSearchQuery] = useState('');
   const [vesselFilter, setVesselFilter] = useState<string>('ALL');
+  const [positionFilter, setPositionFilter] = useState<'ALL' | CrewMember['position']>('ALL');
   const [fileFilter, setFileFilter] = useState<'ALL' | 'HAS_FILE' | 'NO_FILE'>('ALL');
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [uploadingCrewId, setUploadingCrewId] = useState<string | null>(null);
+  const [confirmSyncCaptains, setConfirmSyncCaptains] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Modal xem trước chứng chỉ PDF/Ảnh
   const [previewCrew, setPreviewCrew] = useState<CrewMember | null>(null);
@@ -139,18 +145,29 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
       if (!isCaptain && vesselFilter !== 'ALL' && c.assignedVesselId !== vesselFilter) {
         return false;
       }
+      if (positionFilter !== 'ALL' && c.position !== positionFilter) {
+        return false;
+      }
       if (fileFilter === 'HAS_FILE' && !c.certDocument) return false;
       if (fileFilter === 'NO_FILE' && c.certDocument) return false;
       if (!q) return true;
+      const vessel = vessels.find((v) => v.id === c.assignedVesselId);
       return (
         c.fullName.toLowerCase().includes(q) ||
         c.certNumber.toLowerCase().includes(q) ||
         c.certType.toLowerCase().includes(q) ||
         c.positionTitle.toLowerCase().includes(q) ||
-        c.citizenId.toLowerCase().includes(q)
+        c.citizenId.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q) ||
+        (vessel ? `${vessel.name} ${vessel.regNumber}`.toLowerCase().includes(q) : false)
       );
     });
-  }, [scopedCrewList, isCaptain, vesselFilter, fileFilter, searchQuery]);
+  }, [scopedCrewList, isCaptain, vesselFilter, positionFilter, fileFilter, searchQuery, vessels]);
+
+  const pagination = usePagination(
+    filteredCrew,
+    `${vesselFilter}|${positionFilter}|${fileFilter}|${searchQuery.trim().toLowerCase()}`
+  );
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -339,7 +356,44 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
     );
   };
 
+  const handleSyncCaptainsFromVessels = () => {
+    if (!confirmSyncCaptains) {
+      setConfirmSyncCaptains(true);
+      window.setTimeout(() => setConfirmSyncCaptains(false), 6000);
+      return;
+    }
+    setConfirmSyncCaptains(false);
+    const { removedCount, addedCount } = repository.syncCaptainsFromVessels(currentUser);
+    showToast(
+      'success',
+      `Đã xóa ${removedCount} thuyền trưởng cũ và cập nhật mới ${addedCount} thuyền trưởng theo danh sách phương tiện VR-SB.`
+    );
+  };
+
+  const handleDeleteCrew = (crew: CrewMember) => {
+    if (confirmDeleteId !== crew.id) {
+      setConfirmDeleteId(crew.id);
+      window.setTimeout(() => {
+        setConfirmDeleteId((curr) => (curr === crew.id ? null : curr));
+      }, 5000);
+      return;
+    }
+    setConfirmDeleteId(null);
+    repository.deleteCrew(crew.id);
+    repository.addAuditLog({
+      userId: currentUser.id,
+      userName: currentUser.fullName,
+      userRole: currentUser.role,
+      action: 'XOA_THUYEN_VIEN',
+      targetType: 'SYSTEM',
+      targetId: crew.id,
+      details: `${currentUser.fullName} đã xóa thuyền viên ${crew.fullName} (${crew.positionTitle}) khỏi danh mục.`,
+    });
+    showToast('success', `Đã xóa ${crew.fullName} khỏi danh mục thuyền viên.`);
+  };
+
   const uploadedCount = scopedCrewList.filter((c) => Boolean(c.certDocument)).length;
+  const captainCount = scopedCrewList.filter((c) => c.position === 'CAPTAIN').length;
 
   return (
     <div className="space-y-6">
@@ -349,6 +403,9 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
         icon={<Users className="w-7 h-7" />}
         rightContent={
           <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="px-3.5 py-1.5 bg-white/20 text-white border border-white/30 rounded-full font-extrabold whitespace-nowrap">
+              Thuyền trưởng: {captainCount}
+            </span>
             <span className="px-3.5 py-1.5 bg-white/15 text-white border border-white/25 rounded-full font-extrabold whitespace-nowrap">
               Đã đính kèm PDF/Ảnh: {uploadedCount}/{scopedCrewList.length}
             </span>
@@ -428,6 +485,19 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
             )}
 
             <select
+              value={positionFilter}
+              onChange={(e) => setPositionFilter(e.target.value as 'ALL' | CrewMember['position'])}
+              className="px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl bg-white text-slate-800"
+            >
+              <option value="ALL">Tất cả chức danh</option>
+              {POSITION_OPTIONS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+
+            <select
               value={fileFilter}
               onChange={(e) => setFileFilter(e.target.value as any)}
               className="px-3 py-2 text-xs font-semibold border border-slate-300 rounded-xl bg-white text-slate-800"
@@ -438,16 +508,38 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
             </select>
           </div>
 
-          {canManageCrew && (
-            <button
-              type="button"
-              onClick={openCreateModal}
-              className="px-4 py-2 bg-[#072b61] hover:bg-[#0c4a9c] text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer transition"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Thêm thuyền viên &amp; Tải chứng chỉ</span>
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            {currentUser.role === 'ADMIN' && (
+              <button
+                type="button"
+                onClick={handleSyncCaptainsFromVessels}
+                className={`px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 border cursor-pointer transition ${
+                  confirmSyncCaptains
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 shadow-xs'
+                    : 'bg-blue-50 hover:bg-blue-100 text-[#072b61] border-blue-200'
+                }`}
+                title="Xóa danh sách thuyền trưởng cũ và tạo lại theo danh sách phương tiện VR-SB hiện tại"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>
+                  {confirmSyncCaptains
+                    ? 'Bấm lại để xác nhận đồng bộ TT'
+                    : 'Đồng bộ thuyền trưởng từ DS tàu VR-SB'}
+                </span>
+              </button>
+            )}
+
+            {canManageCrew && (
+              <button
+                type="button"
+                onClick={openCreateModal}
+                className="px-4 py-2 bg-[#072b61] hover:bg-[#0c4a9c] text-white rounded-xl text-xs font-extrabold flex items-center gap-1.5 shadow-xs cursor-pointer transition"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Thêm thuyền viên &amp; Tải chứng chỉ</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -484,7 +576,7 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
                   </td>
                 </tr>
               ) : (
-                filteredCrew.map((c) => {
+                pagination.pageItems.map((c) => {
                   const isExpired = c.certExpireDate < today;
                   const isExpiringSoon =
                     !isExpired && (c.status === 'EXPIRING_SOON' || computeCertStatus(c.certExpireDate) === 'EXPIRING_SOON');
@@ -507,8 +599,12 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
                       </td>
 
                       <td className="py-3 px-3">
-                        <div className="font-mono text-[11px]">{maskIdNumber(c.citizenId)}</div>
-                        <div className="text-[11px] text-slate-500">{maskPhone(c.phone)}</div>
+                        <div className="font-mono text-[11px] text-slate-700">
+                          {c.citizenId ? maskIdNumber(c.citizenId) : 'Chưa cập nhật'}
+                        </div>
+                        <div className="text-[11px] font-semibold text-slate-800 font-mono">
+                          {c.phone || '---'}
+                        </div>
                       </td>
 
                       <td className="py-3 px-3">
@@ -620,6 +716,22 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
+
+                              {currentUser.role === 'ADMIN' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCrew(c)}
+                                  className={`px-2 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer transition ${
+                                    confirmDeleteId === c.id
+                                      ? 'bg-red-600 hover:bg-red-700 text-white'
+                                      : 'bg-red-50 hover:bg-red-100 text-red-700 border border-red-200'
+                                  }`}
+                                  title="Xóa thuyền viên khỏi danh mục"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  {confirmDeleteId === c.id && <span>Xác nhận</span>}
+                                </button>
+                              )}
                             </>
                           )}
                         </div>
@@ -631,6 +743,16 @@ export const CrewCatalogPage: React.FC<CrewCatalogPageProps> = ({ currentUser })
             </tbody>
           </table>
         </div>
+        <PaginationBar
+          currentPage={pagination.currentPage}
+          totalPages={pagination.totalPages}
+          totalItems={pagination.totalItems}
+          pageSize={pagination.pageSize}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setCurrentPage}
+          itemLabel="thuyền viên"
+        />
       </div>
 
       {/* Modal xem trước tệp PDF / Ảnh chứng chỉ thuyền viên */}

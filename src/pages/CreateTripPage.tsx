@@ -24,9 +24,8 @@ import {
   getTodayIsoDate,
 } from '../services/crewCertSyncService';
 import { RulesEngine } from '../services/rulesEngine';
-import { GeminiService, AnomalyReport } from '../services/geminiService';
+import { GeminiService } from '../services/geminiService';
 import { OfficialFormsModal } from '../components/OfficialFormsModal';
-import { CoastalPageHero } from '../components/CoastalPageHero';
 import { DocumentPreviewModal } from '../components/DocumentPreviewModal';
 import {
   formatDate,
@@ -36,6 +35,7 @@ import {
   maskIdNumber,
   maskPhone,
   getRejectedOriginLabel,
+  getReturnScopeLabel,
 } from '../utils/formatters';
 import * as XLSX from 'xlsx';
 
@@ -93,8 +93,6 @@ import {
   EyeOff,
   Info,
   LifeBuoy,
-  Wifi,
-  WifiOff,
   RotateCcw,
   Paperclip,
   Camera,
@@ -102,6 +100,9 @@ import {
   Receipt,
   FileCheck,
   ShieldAlert,
+  Loader2,
+  Image as ImageIcon,
+  X,
 } from 'lucide-react';
 import { getUserAccessibleVesselIds } from '../utils/userPermissions';
 
@@ -165,8 +166,6 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
 
   // Tiến trình 6 bước (Theo yêu cầu: Bước 1: Thông tin chung, Bước 5: Giấy tờ đính kèm, Bước 6: Nộp hồ sơ)
   const [currentStep, setCurrentStep] = useState<number>(1);
-  const [lastAutoSavedTime, setLastAutoSavedTime] = useState<string>('');
-  const [isOnline] = useState<boolean>(navigator.onLine);
   const [toastBanner, setToastBanner] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [pendingCopyTrip, setPendingCopyTrip] = useState<TripRecord | null>(null);
   const [showWithdrawModal, setShowWithdrawModal] = useState<boolean>(false);
@@ -334,10 +333,14 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
   }, [crewCatalog, currentUser, accessibleVesselIds]);
 
   const [selectedCaptainId, setSelectedCaptainId] = useState<string>(() => {
+    if (existingTrip?.captainId) return existingTrip.captainId;
     if (currentUser.role === 'CAPTAIN' && userCaptainCrew) {
       return userCaptainCrew.id;
     }
-    return existingTrip?.captainId || crewCatalog.find((c) => c.position === 'CAPTAIN')?.id || 'CREW-01';
+    const byVessel = crewCatalog.find(
+      (c) => c.position === 'CAPTAIN' && c.assignedVesselId === selectedVesselId
+    );
+    return byVessel?.id || crewCatalog.find((c) => c.position === 'CAPTAIN')?.id || '';
   });
 
   const [crewMembers, setCrewMembers] = useState<
@@ -384,10 +387,20 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
         };
       });
     }
-    // Mặc định nạp từ danh mục thuyền viên (nếu có) theo 3 vị trí chuẩn
-    const capt = (currentUser.role === 'CAPTAIN' && userCaptainCrew) ? userCaptainCrew : (crewCatalog.find((c) => c.id === 'CREW-01') || crewCatalog[0]);
-    const eng = crewCatalog.find((c) => c.id === 'CREW-02') || crewCatalog[1];
-    const deck = crewCatalog.find((c) => c.id === 'CREW-04') || crewCatalog[2];
+    // Mặc định nạp từ danh mục thuyền viên (nếu có) theo đúng chức danh và tàu đang chọn
+    const vesselCapt = crewCatalog.find(
+      (c) => c.position === 'CAPTAIN' && c.assignedVesselId === selectedVesselId
+    );
+    const capt =
+      currentUser.role === 'CAPTAIN' && userCaptainCrew
+        ? userCaptainCrew
+        : vesselCapt || crewCatalog.find((c) => c.position === 'CAPTAIN');
+    const eng = crewCatalog.find(
+      (c) => c.position === 'CHIEF_ENGINEER' && (!c.assignedVesselId || c.assignedVesselId === selectedVesselId)
+    );
+    const deck = crewCatalog.find(
+      (c) => c.position === 'DECKHAND' && (!c.assignedVesselId || c.assignedVesselId === selectedVesselId)
+    );
 
     const initialCrew: {
       crewId: string;
@@ -478,6 +491,9 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
   const [newPaxAddress, setNewPaxAddress] = useState<string>('Thôn Tây, Lý Sơn, Quảng Ngãi');
   const [newPaxNotes, setNewPaxNotes] = useState<string>('');
   const [showAddPaxForm, setShowAddPaxForm] = useState<boolean>(false);
+  const [paxFormError, setPaxFormError] = useState<string>('');
+  const [sessionAddedPax, setSessionAddedPax] = useState<Passenger[]>([]);
+  const newPaxNameInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ==========================================
@@ -638,17 +654,19 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const step5CrewUploadInputRef = useRef<HTMLInputElement>(null);
   const step5UploadTargetCrewIdRef = useRef<string | null>(null);
+  const [uploadingCrewCertId, setUploadingCrewCertId] = useState<string | null>(null);
+  const quickUploadCategoryRef = useRef<UploadedDocument['category'] | null>(null);
+  const [uploadingCategory, setUploadingCategory] = useState<UploadedDocument['category'] | null>(null);
 
   // ==========================================
   // BƯỚC 6: NỘP HỒ SƠ (THẨM ĐỊNH 12 QUY TẮC & NỘP)
   // ==========================================
   const [acceptedWarningConsent, setAcceptedWarningConsent] = useState<boolean>(false);
+  const [step6RuleFilter, setStep6RuleFilter] = useState<'ALL' | 'FAILED' | 'WARNING' | 'PASSED'>('ALL');
   const [previewModalOpen, setPreviewModalOpen] = useState<boolean>(false);
   const [previewTab, setPreviewTab] = useState<'GENERAL' | 'CREW' | 'PASSENGER'>('GENERAL');
 
-  // AI Gemini state
-  const [aiAnalysis, setAiAnalysis] = useState<AnomalyReport | null>(null);
-  const [isAiAnalyzing, setIsAiAnalyzing] = useState<boolean>(false);
+  // Chat hướng dẫn AI state
   const [showAiChatDrawer, setShowAiChatDrawer] = useState<boolean>(false);
   const [aiChatInput, setAiChatInput] = useState<string>('');
   const [aiChatMessages, setAiChatMessages] = useState<{ role: 'user' | 'assistant'; text: string }[]>([
@@ -680,7 +698,7 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
     return crewCertChecks.filter((c) => c.requiresStep5Upload);
   }, [crewCertChecks]);
 
-  // Cập nhật thông số mớn nước & tự động đồng bộ giấy tờ dùng lại khi đổi tàu hoặc đổi thuyền viên / danh mục hệ thống
+  // Cập nhật thông số mớn nước & tự động đồng bộ thuyền trưởng theo tàu khi đổi tàu trên hồ sơ mới
   useEffect(() => {
     if (selectedVessel) {
       if (!existingTrip || existingTrip.vesselId !== selectedVesselId) {
@@ -689,6 +707,32 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
       }
       if (!existingTrip) {
         setActualLifeJackets(passengers.length + crewMembers.length + 3);
+        const vesselCaptain = crewCatalog.find(
+          (c) => c.position === 'CAPTAIN' && c.assignedVesselId === selectedVessel.id
+        );
+        if (vesselCaptain) {
+          setSelectedCaptainId(vesselCaptain.id);
+          setCrewMembers((prev) => {
+            const captainRow = {
+              crewId: vesselCaptain.id,
+              fullName: vesselCaptain.fullName,
+              positionTitle: 'Thuyền trưởng',
+              certNumber: vesselCaptain.certNumber,
+              certExpireDate: vesselCaptain.certExpireDate,
+              nationality: vesselCaptain.nationality || 'Việt Nam',
+              birthDate: vesselCaptain.birthDate || '',
+              birthPlace: vesselCaptain.birthPlace || 'Lý Sơn, Quảng Ngãi',
+              passportNumber: vesselCaptain.citizenId || '',
+            };
+            const idx = prev.findIndex((m) => m.positionTitle.toLowerCase().includes('thuyền trưởng'));
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = { ...next[idx], ...captainRow };
+              return next;
+            }
+            return [captainRow, ...prev];
+          });
+        }
       }
     }
   }, [selectedVesselId]);
@@ -723,6 +767,7 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
         : crewCatalog.find((c) => c.id === selectedCaptainId) || crewCatalog[0];
 
     return {
+      ...(existingTrip || {}),
       id: existingTrip?.id || `TRIP-${Date.now().toString().slice(-6)}`,
       tripNumber: existingTrip?.tripNumber || `HS-2026-${String(existingTrips.length + 1).padStart(4, '0')}`,
       vesselId: selectedVessel?.id,
@@ -830,18 +875,393 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
     );
   }, [currentDraftTrip, selectedVessel, crewMembers, weather, existingTrips, rulesConfig, activeBpStops]);
 
+  // Danh sách kết quả kiểm tra Bước 6: chỉ hiển thị các kiểm tra liên quan đến
+  // tàu (phương tiện), thuyền viên, hàng hóa và giấy tờ liên quan đến thuyền
+  const step6InspectionSummary = useMemo(() => {
+    type Step6GroupKey = 'TAU' | 'THUYEN_VIEN' | 'HANG_HOA' | 'GIAY_TO_TAU';
+    interface Step6CheckItem {
+      code: string;
+      groupKey: Step6GroupKey;
+      groupTitle: string;
+      title: string;
+      status: 'PASSED' | 'WARNING' | 'FAILED';
+      severity: 'BLOCKING' | 'WARNING' | 'INFO';
+      message: string;
+      details?: string;
+      targetStep: number;
+      targetLabel: string;
+    }
+
+    const items: Step6CheckItem[] = [];
+    const findRule = (code: string) =>
+      evaluation.results.find((r) => String(r.ruleCode).toUpperCase() === code);
+
+    const paxCount = passengers.length;
+    const crewCount = crewMembers.length;
+    const totalPeople = paxCount + crewCount;
+    const maxPax = selectedVessel?.maxPassengers ?? 0;
+    const minCrew = selectedVessel?.minCrew ?? 2;
+    const maxCargo = selectedVessel?.maxCargoTons ?? 0;
+
+    // I. KIỂM TRA TÀU (PHƯƠNG TIỆN)
+    const r1 = findRule('R1');
+    const overPax = Boolean(selectedVessel && (paxCount > maxPax || totalPeople > maxPax + minCrew));
+    if (!selectedVessel) {
+      items.push({
+        code: 'R1',
+        groupKey: 'TAU',
+        groupTitle: 'I. Kiểm tra phương tiện (Tàu)',
+        title: 'Sức chở hành khách & định mức phương tiện',
+        status: 'FAILED',
+        severity: 'BLOCKING',
+        message: 'Chưa xác định phương tiện VR-SB thực hiện chuyến đi.',
+        targetStep: 1,
+        targetLabel: 'Bước 1',
+      });
+    } else if (overPax) {
+      items.push({
+        code: 'R1',
+        groupKey: 'TAU',
+        groupTitle: 'I. Kiểm tra phương tiện (Tàu)',
+        title: 'Sức chở hành khách & định mức phương tiện',
+        status: 'FAILED',
+        severity: 'BLOCKING',
+        message: `Vượt sức chở tàu ${selectedVessel.name}: ${paxCount} hành khách (tổng ${totalPeople} người) vượt định mức tối đa ${maxPax} khách.`,
+        details: 'Nghiêm cấm chở quá số người cho phép theo giấy chứng nhận an toàn kỹ thuật.',
+        targetStep: 3,
+        targetLabel: 'Bước 3',
+      });
+    } else {
+      items.push({
+        code: 'R1',
+        groupKey: 'TAU',
+        groupTitle: 'I. Kiểm tra phương tiện (Tàu)',
+        title: 'Sức chở hành khách & định mức phương tiện',
+        status: 'PASSED',
+        severity: 'INFO',
+        message: `Hợp lệ: ${paxCount}/${maxPax} hành khách (tổng ${totalPeople} người trên tàu ${selectedVessel.name}).`,
+        details: r1 && r1.status === 'PASSED' ? r1.details : undefined,
+        targetStep: 3,
+        targetLabel: 'Bước 3',
+      });
+    }
+
+    const lifeJacketsShort = actualLifeJackets < totalPeople;
+    items.push({
+      code: 'TB-TAU',
+      groupKey: 'TAU',
+      groupTitle: 'I. Kiểm tra phương tiện (Tàu)',
+      title: 'Trang bị áo phao cứu sinh trên tàu',
+      status: lifeJacketsShort ? 'FAILED' : 'PASSED',
+      severity: lifeJacketsShort ? 'BLOCKING' : 'INFO',
+      message: lifeJacketsShort
+        ? `Thiếu áo phao cứu sinh: Hiện khai báo ${actualLifeJackets} cái, cần tối thiểu ${totalPeople} cái cho ${totalPeople} người trên tàu.`
+        : `Đủ trang bị cứu sinh: ${actualLifeJackets} áo phao (yêu cầu tối thiểu ${totalPeople} cái cho ${paxCount} khách + ${crewCount} thuyền viên).`,
+      targetStep: 4,
+      targetLabel: 'Bước 4',
+    });
+
+    const r5 = findRule('R5');
+    if (r5) {
+      items.push({
+        code: 'R5',
+        groupKey: 'TAU',
+        groupTitle: 'I. Kiểm tra phương tiện (Tàu)',
+        title: r5.ruleName,
+        status: r5.status,
+        severity: r5.severity,
+        message: r5.message,
+        details: r5.details,
+        targetStep: 1,
+        targetLabel: 'Bước 1',
+      });
+    }
+
+    // II. KIỂM TRA THUYỀN VIÊN
+    const r3 = findRule('R3');
+    if (r3) {
+      items.push({
+        code: 'R3',
+        groupKey: 'THUYEN_VIEN',
+        groupTitle: 'II. Kiểm tra thuyền viên',
+        title: r3.ruleName,
+        status: r3.status,
+        severity: r3.severity,
+        message: r3.message,
+        details: r3.details,
+        targetStep: 2,
+        targetLabel: 'Bước 2',
+      });
+    }
+
+    const r4 = findRule('R4');
+    if (r4) {
+      let r4Message = r4.message;
+      if (r4.status === 'FAILED') {
+        const tripMap = new Map<string, string>();
+        const regex = /đang tham gia chuyến\s+([^\s(;.,]+)(?:\s*\(([^)]+)\))?/g;
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(r4.message)) !== null) {
+          const tripCode = match[1]?.trim();
+          const vesselLabel = match[2]?.trim() || '';
+          if (tripCode && !tripMap.has(tripCode)) {
+            tripMap.set(tripCode, vesselLabel);
+          }
+        }
+        const uniqueTrips = Array.from(tripMap.entries());
+        if (uniqueTrips.length === 1) {
+          const [code, vesselLabel] = uniqueTrips[0];
+          r4Message = vesselLabel ? `Trùng chuyến: ${code} (${vesselLabel})` : `Trùng chuyến: ${code}`;
+        } else if (uniqueTrips.length > 1) {
+          const shownCodes = uniqueTrips.slice(0, 3).map(([code]) => code);
+          const extraCount = uniqueTrips.length - shownCodes.length;
+          r4Message =
+            extraCount > 0
+              ? `Trùng chuyến: ${shownCodes.join(', ')} (+${extraCount} chuyến khác)`
+              : `Trùng chuyến: ${shownCodes.join(', ')}`;
+        }
+      }
+      items.push({
+        code: 'R4',
+        groupKey: 'THUYEN_VIEN',
+        groupTitle: 'II. Kiểm tra thuyền viên',
+        title: 'Thuyền viên trên chuyến chưa kết thúc',
+        status: r4.status,
+        severity: r4.severity,
+        message: r4Message,
+        details: undefined,
+        targetStep: 2,
+        targetLabel: 'Bước 2',
+      });
+    }
+
+    if (missingOrExpiredCrewCerts.length > 0) {
+      const detailList = missingOrExpiredCrewCerts
+        .map((c) => `${c.fullName || c.positionTitle} (${c.reasonText})`)
+        .join('; ');
+      items.push({
+        code: 'GT-TV',
+        groupKey: 'THUYEN_VIEN',
+        groupTitle: 'II. Kiểm tra thuyền viên',
+        title: 'Tệp chứng chỉ chuyên môn thuyền viên trực ca',
+        status: 'FAILED',
+        severity: 'BLOCKING',
+        message: `Còn ${missingOrExpiredCrewCerts.length}/${crewCount} thuyền viên chưa có tệp chứng chỉ hợp lệ hoặc chứng chỉ đã hết hạn.`,
+        details: detailList,
+        targetStep: 5,
+        targetLabel: 'Bước 5',
+      });
+    } else {
+      items.push({
+        code: 'GT-TV',
+        groupKey: 'THUYEN_VIEN',
+        groupTitle: 'II. Kiểm tra thuyền viên',
+        title: 'Tệp chứng chỉ chuyên môn thuyền viên trực ca',
+        status: 'PASSED',
+        severity: 'INFO',
+        message: `Đầy đủ chứng chỉ chuyên môn hợp lệ cho toàn bộ ${crewCount} thuyền viên trực ca.`,
+        targetStep: 5,
+        targetLabel: 'Bước 5',
+      });
+    }
+
+    // III. KIỂM TRA HÀNG HÓA
+    const numericCargo = Number(cargoTons || 0);
+    const overCargo = Boolean(selectedVessel && numericCargo > maxCargo);
+    const missingCargoDesc = numericCargo > 0 && !cargoDescription.trim();
+    if (overCargo) {
+      items.push({
+        code: 'HH-01',
+        groupKey: 'HANG_HOA',
+        groupTitle: 'III. Kiểm tra hàng hóa',
+        title: 'Trọng tải & kê khai hàng hóa xếp trên tàu',
+        status: 'FAILED',
+        severity: 'BLOCKING',
+        message: `Vượt trọng tải hàng hóa cho phép: Đang khai ${numericCargo} tấn, vượt mức tối đa ${maxCargo} tấn của tàu ${selectedVessel?.name || ''}.`,
+        details: 'Cần giảm khối lượng hàng hóa về đúng giới hạn trọng tải an toàn tại Bước 4.',
+        targetStep: 4,
+        targetLabel: 'Bước 4',
+      });
+    } else if (missingCargoDesc) {
+      items.push({
+        code: 'HH-01',
+        groupKey: 'HANG_HOA',
+        groupTitle: 'III. Kiểm tra hàng hóa',
+        title: 'Trọng tải & kê khai hàng hóa xếp trên tàu',
+        status: 'WARNING',
+        severity: 'WARNING',
+        message: `Khối lượng hàng hóa ${numericCargo}/${maxCargo} tấn đạt định mức nhưng chưa nhập mô tả loại hàng hóa.`,
+        details: 'Khuyến nghị ghi rõ loại hàng hóa xếp trên tàu tại Bước 4 để thuận tiện đối chiếu.',
+        targetStep: 4,
+        targetLabel: 'Bước 4',
+      });
+    } else {
+      items.push({
+        code: 'HH-01',
+        groupKey: 'HANG_HOA',
+        groupTitle: 'III. Kiểm tra hàng hóa',
+        title: 'Trọng tải & kê khai hàng hóa xếp trên tàu',
+        status: 'PASSED',
+        severity: 'INFO',
+        message:
+          numericCargo > 0
+            ? `Hợp lệ: ${numericCargo}/${maxCargo} tấn hàng hóa (${cargoDescription.trim()}).`
+            : `Hợp lệ: Không chở hàng hóa (0/${maxCargo} tấn).`,
+        targetStep: 4,
+        targetLabel: 'Bước 4',
+      });
+    }
+
+    // IV. KIỂM TRA GIẤY TỜ LIÊN QUAN ĐẾN THUYỀN
+    const r2 = findRule('R2');
+    if (r2) {
+      items.push({
+        code: 'R2',
+        groupKey: 'GIAY_TO_TAU',
+        groupTitle: 'IV. Kiểm tra giấy tờ liên quan đến thuyền',
+        title: r2.ruleName,
+        status: r2.status,
+        severity: r2.severity,
+        message: r2.message,
+        details: r2.details,
+        targetStep: 5,
+        targetLabel: 'Bước 5',
+      });
+    }
+
+    const r6 = findRule('R6');
+    if (r6) {
+      items.push({
+        code: 'R6',
+        groupKey: 'GIAY_TO_TAU',
+        groupTitle: 'IV. Kiểm tra giấy tờ liên quan đến thuyền',
+        title: r6.ruleName,
+        status: r6.status,
+        severity: r6.severity,
+        message: r6.message,
+        details: r6.details,
+        targetStep: 5,
+        targetLabel: 'Bước 5',
+      });
+    }
+
+    const regDoc = uploadedDocuments.find((d) => d.category === 'REGISTRATION_CERT');
+    const safetyDoc = uploadedDocuments.find((d) => d.category === 'TECH_SAFETY_CERT');
+    const insuranceDoc = uploadedDocuments.find((d) => d.category === 'CIVIL_INSURANCE');
+    const missingVesselDocNames: string[] = [];
+    if (!regDoc) missingVesselDocNames.push('GCN Đăng ký phương tiện');
+    if (!safetyDoc) missingVesselDocNames.push('GCN ATKT & BVMT (Đăng kiểm)');
+    if (!insuranceDoc) missingVesselDocNames.push('Bảo hiểm TNDS');
+
+    if (!regDoc || !safetyDoc) {
+      items.push({
+        code: 'GT-TAU',
+        groupKey: 'GIAY_TO_TAU',
+        groupTitle: 'IV. Kiểm tra giấy tờ liên quan đến thuyền',
+        title: 'Hồ sơ giấy tờ phương tiện đính kèm',
+        status: 'FAILED',
+        severity: 'BLOCKING',
+        message: `Chưa đính kèm đủ giấy tờ tàu bắt buộc: ${missingVesselDocNames.join(', ')}.`,
+        details: 'Cần bổ sung hoặc đồng bộ giấy tờ tàu tại Bước 5 trước khi gửi hồ sơ.',
+        targetStep: 5,
+        targetLabel: 'Bước 5',
+      });
+    } else if (!insuranceDoc) {
+      items.push({
+        code: 'GT-TAU',
+        groupKey: 'GIAY_TO_TAU',
+        groupTitle: 'IV. Kiểm tra giấy tờ liên quan đến thuyền',
+        title: 'Hồ sơ giấy tờ phương tiện đính kèm',
+        status: 'WARNING',
+        severity: 'WARNING',
+        message: 'Đã đính kèm GCN Đăng ký và GCN ATKT & BVMT; chưa đính kèm tệp Bảo hiểm TNDS.',
+        details: 'Khuyến nghị bổ sung bản chụp/PDF Bảo hiểm TNDS của tàu tại Bước 5.',
+        targetStep: 5,
+        targetLabel: 'Bước 5',
+      });
+    } else {
+      items.push({
+        code: 'GT-TAU',
+        groupKey: 'GIAY_TO_TAU',
+        groupTitle: 'IV. Kiểm tra giấy tờ liên quan đến thuyền',
+        title: 'Hồ sơ giấy tờ phương tiện đính kèm',
+        status: 'PASSED',
+        severity: 'INFO',
+        message: 'Đã đính kèm đầy đủ GCN Đăng ký phương tiện, GCN ATKT & BVMT (Đăng kiểm) và Bảo hiểm TNDS.',
+        targetStep: 5,
+        targetLabel: 'Bước 5',
+      });
+    }
+
+    const passedCount = items.filter((i) => i.status === 'PASSED').length;
+    const warningCount = items.filter((i) => i.status === 'WARNING').length;
+    const blockingCount = items.filter((i) => i.status === 'FAILED').length;
+
+    return {
+      items,
+      totalCount: items.length,
+      passedCount,
+      warningCount,
+      blockingCount,
+      hasBlockingFailure: blockingCount > 0,
+      hasWarning: warningCount > 0,
+    };
+  }, [
+    evaluation.results,
+    selectedVessel,
+    passengers.length,
+    crewMembers.length,
+    actualLifeJackets,
+    cargoTons,
+    cargoDescription,
+    uploadedDocuments,
+    missingOrExpiredCrewCerts,
+  ]);
+
   // ==========================================
   // THAO TÁC HÀNH KHÁCH
   // ==========================================
-  const handleAddPassenger = () => {
+  const openAddPassengerModal = () => {
+    setPaxFormError('');
+    setSessionAddedPax([]);
+    setShowAddPaxForm(true);
+    setTimeout(() => {
+      newPaxNameInputRef.current?.focus();
+    }, 50);
+  };
+
+  const closeAddPassengerModal = () => {
+    setShowAddPaxForm(false);
+    setPaxFormError('');
+    setSessionAddedPax([]);
+  };
+
+  useEffect(() => {
+    if (!showAddPaxForm) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeAddPassengerModal();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showAddPaxForm]);
+
+  const handleAddPassenger = (keepOpen: boolean = false) => {
     if (!newPaxName.trim()) {
-      showToast('error', 'Vui lòng nhập họ và tên hành khách');
+      setPaxFormError('Vui lòng nhập họ và tên hành khách.');
+      newPaxNameInputRef.current?.focus();
+      return;
+    }
+    const parsedYear = Number(newPaxBirthYear);
+    if (!Number.isFinite(parsedYear) || parsedYear < 1900 || parsedYear > 2026) {
+      setPaxFormError('Năm sinh không hợp lệ (từ 1900 đến 2026).');
       return;
     }
     const newPax: Passenger = {
       id: `PAX-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       fullName: newPaxName.trim(),
-      birthYear: Number(newPaxBirthYear),
+      birthYear: parsedYear,
       gender: newPaxGender,
       phone: newPaxPhone.trim() || '0988000111',
       idNumber: newPaxIdNumber.trim() || `0510${Math.floor(10000000 + Math.random() * 90000000)}`,
@@ -851,16 +1271,27 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
       notes: newPaxNotes.trim(),
     };
 
-    setPassengers([...passengers, newPax]);
+    setPassengers((prev) => [...prev, newPax]);
     setNewPaxName('');
     setNewPaxPhone('');
     setNewPaxIdNumber('');
     setNewPaxNotes('');
-    setShowAddPaxForm(false);
+    setPaxFormError('');
+
+    if (keepOpen) {
+      setSessionAddedPax((prev) => [newPax, ...prev]);
+      setTimeout(() => {
+        newPaxNameInputRef.current?.focus();
+      }, 40);
+    } else {
+      closeAddPassengerModal();
+      showToast('success', `Đã thêm hành khách ${newPax.fullName} vào danh sách.`);
+    }
   };
 
   const handleRemovePassenger = (id: string) => {
-    setPassengers(passengers.filter((p) => p.id !== id));
+    setPassengers((prev) => prev.filter((p) => p.id !== id));
+    setSessionAddedPax((prev) => prev.filter((p) => p.id !== id));
   };
 
   const handleInsertFrequentPassengers = () => {
@@ -1079,25 +1510,92 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
     setPreviewDocModal(newDoc);
   };
 
+  const resolveCrewCertDoc = (
+    cm: { crewId: string; fullName: string; positionTitle: string; certNumber: string; certExpireDate: string },
+    certCheck?: (typeof crewCertChecks)[number]
+  ): UploadedDocument | undefined => {
+    if (certCheck?.currentStep5Doc) return certCheck.currentStep5Doc;
+    const fromUploaded = uploadedDocuments.find(
+      (d) =>
+        d.category === 'CREW_CERTIFICATE' &&
+        (d.crewId === cm.crewId ||
+          (certCheck?.matchedCatalogCrew?.id && d.crewId === certCheck.matchedCatalogCrew.id))
+    );
+    if (fromUploaded) return fromUploaded;
+    const att = certCheck?.reusableAttachment || certCheck?.matchedCatalogCrew?.certDocument;
+    if (!att) return undefined;
+    return {
+      id: `DOC-CREW-${certCheck?.matchedCatalogCrew?.id || cm.crewId}`,
+      category: 'CREW_CERTIFICATE',
+      categoryName: `Chứng chỉ ${cm.positionTitle || 'thuyền viên'}`,
+      fileName: att.fileName,
+      fileType: att.fileType,
+      fileSize: att.fileSize,
+      uploadedAt: att.uploadedAt,
+      previewUrl: att.previewUrl,
+      storageKey: att.storageKey,
+      serverUrl: att.serverUrl,
+      serverPath: att.serverPath,
+      mimeType: att.mimeType,
+      crewId: certCheck?.matchedCatalogCrew?.id || cm.crewId,
+      isRequired: true,
+      isReusable: true,
+      reusableSource: 'CREW',
+      validUntil: cm.certExpireDate ? formatDate(cm.certExpireDate) : undefined,
+      note:
+        att.note ||
+        `${cm.positionTitle}: ${cm.fullName} • Số bằng ${cm.certNumber}`,
+    };
+  };
+
+  const triggerCrewCertUpload = (crewId: string) => {
+    step5UploadTargetCrewIdRef.current = crewId;
+    step5CrewUploadInputRef.current?.click();
+  };
+
   const handleStep5CrewFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     const targetCrewId = step5UploadTargetCrewIdRef.current;
     e.target.value = '';
     if (!file || !targetCrewId) return;
+    setUploadingCrewCertId(targetCrewId);
     try {
       await uploadCrewCertificateForMember(targetCrewId, file);
+      const targetMember = crewMembers.find((c) => c.crewId === targetCrewId);
+      showToast(
+        'success',
+        `Đã tải giấy chứng nhận "${file.name}" cho ${targetMember?.fullName || 'thuyền viên'} và lưu hệ thống để tự động đọc lại cho các chuyến sau.`
+      );
     } catch (err: any) {
       showToast('error', err?.message || 'Không thể tải tệp chứng chỉ lên.');
+    } finally {
+      setUploadingCrewCertId(null);
+    }
+  };
+
+  const triggerCategoryDocUpload = (
+    category: UploadedDocument['category'],
+    useCamera = false
+  ) => {
+    quickUploadCategoryRef.current = category;
+    setSelectedDocCategory(category);
+    if (useCamera) {
+      cameraInputRef.current?.click();
+    } else {
+      docFileInputRef.current?.click();
     }
   };
 
   const handleAddUploadedFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (e.target) e.target.value = '';
+    const targetCategory = quickUploadCategoryRef.current || selectedDocCategory;
+    quickUploadCategoryRef.current = null;
     if (!file) return;
 
+    setUploadingCategory(targetCategory);
     try {
-      if (selectedDocCategory === 'CREW_CERTIFICATE') {
+      if (targetCategory === 'CREW_CERTIFICATE') {
         const targetCrewId = selectedCertCrewId || crewMembers[0]?.crewId || selectedCaptainId;
         await uploadCrewCertificateForMember(targetCrewId, file);
         setDocNoteInput('');
@@ -1106,7 +1604,7 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
 
       const saved = await fileStorageService.saveUploadedFile(
         file,
-        `trip_${selectedDocCategory.toLowerCase()}`
+        `trip_${targetCategory.toLowerCase()}`
       );
 
       const docId = `DOC-${Date.now()}`;
@@ -1117,8 +1615,8 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
         const srv = await dossierArchiveService.uploadBlobToDossier(draftTripNumber, 'giay-to', file, {
           fileName: saved.fileName,
           mimeType: saved.mimeType,
-          category: selectedDocCategory,
-          categoryName: categoryNamesMap[selectedDocCategory],
+          category: targetCategory,
+          categoryName: categoryNamesMap[targetCategory],
           docId,
           note: docNoteInput.trim() || undefined,
           uploadedByName: currentUser.fullName,
@@ -1134,8 +1632,8 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
 
       const newDoc: UploadedDocument = {
         id: docId,
-        category: selectedDocCategory,
-        categoryName: categoryNamesMap[selectedDocCategory],
+        category: targetCategory,
+        categoryName: categoryNamesMap[targetCategory],
         fileName: saved.fileName,
         fileType: saved.fileType,
         fileSize: saved.fileSize,
@@ -1144,17 +1642,25 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
         storageKey: saved.storageKey,
         ...serverMeta,
         mimeType: saved.mimeType,
-        isRequired: ['REGISTRATION_CERT', 'TECH_SAFETY_CERT', 'CREW_CERTIFICATE', 'FEE_RECEIPT'].includes(selectedDocCategory),
-        isReusable: selectedDocCategory === 'REGISTRATION_CERT' || selectedDocCategory === 'TECH_SAFETY_CERT',
+        isRequired: ['REGISTRATION_CERT', 'TECH_SAFETY_CERT', 'CREW_CERTIFICATE', 'FEE_RECEIPT'].includes(targetCategory),
+        isReusable: targetCategory === 'REGISTRATION_CERT' || targetCategory === 'TECH_SAFETY_CERT' || targetCategory === 'CIVIL_INSURANCE',
         reusableSource: 'MANUAL',
         note: docNoteInput.trim() || undefined,
       };
 
-      setUploadedDocuments((prev) => [...prev, newDoc]);
+      setUploadedDocuments((prev) => {
+        if (targetCategory === 'REGISTRATION_CERT' || targetCategory === 'TECH_SAFETY_CERT' || targetCategory === 'CIVIL_INSURANCE') {
+          return [...prev.filter((d) => d.category !== targetCategory), newDoc];
+        }
+        return [...prev, newDoc];
+      });
       setDocNoteInput('');
       setPreviewDocModal(newDoc);
+      showToast('success', `Đã bổ sung "${saved.fileName}" vào mục ${categoryNamesMap[targetCategory]}.`);
     } catch (err: any) {
       showToast('error', err?.message || 'Không thể tải tệp lên. Vui lòng chọn tệp PDF hoặc ảnh hợp lệ (<= 15MB).');
+    } finally {
+      setUploadingCategory(null);
     }
   };
 
@@ -1307,11 +1813,14 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
       setCargoTons(0.5);
       setCrewMembers([
         {
-          crewId: userCaptainCrew?.id || 'CREW-01',
-          fullName: currentUser.role === 'CAPTAIN' ? currentUser.fullName : 'Nguyễn Văn Hùng',
+          crewId: userCaptainCrew?.id || 'CREW-CAP-VES-01',
+          fullName:
+            currentUser.role === 'CAPTAIN'
+              ? currentUser.fullName
+              : selectedVessel?.captainName || userCaptainCrew?.fullName || 'Lê Tấn Lý',
           positionTitle: 'Thuyền trưởng',
-          certNumber: userCaptainCrew?.certNumber || 'TT-VRSB-00821',
-          certExpireDate: userCaptainCrew?.certExpireDate || '2028-06-30',
+          certNumber: userCaptainCrew?.certNumber || 'TT-VRSB-QNG0322',
+          certExpireDate: userCaptainCrew?.certExpireDate || '2028-12-31',
           nationality: 'Việt Nam',
           birthDate: '1980',
           birthPlace: 'Lý Sơn',
@@ -1346,11 +1855,14 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
       setSelectedVesselId('VES-01');
       setCrewMembers([
         {
-          crewId: userCaptainCrew?.id || 'CREW-01',
-          fullName: currentUser.role === 'CAPTAIN' ? currentUser.fullName : 'Nguyễn Văn Hùng',
+          crewId: userCaptainCrew?.id || 'CREW-CAP-VES-01',
+          fullName:
+            currentUser.role === 'CAPTAIN'
+              ? currentUser.fullName
+              : selectedVessel?.captainName || userCaptainCrew?.fullName || 'Lê Tấn Lý',
           positionTitle: 'Thuyền trưởng',
-          certNumber: userCaptainCrew?.certNumber || 'TT-VRSB-00821',
-          certExpireDate: userCaptainCrew?.certExpireDate || '2028-06-30',
+          certNumber: userCaptainCrew?.certNumber || 'TT-VRSB-QNG0322',
+          certExpireDate: userCaptainCrew?.certExpireDate || '2028-12-31',
           nationality: 'Việt Nam',
           birthDate: '1980',
           birthPlace: 'Lý Sơn',
@@ -1429,7 +1941,6 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
     );
     syncTripCrewAndCertificatesToSystem(crewMembers, selectedVesselId, uploadedDocuments, currentUser);
     const nowTime = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    setLastAutoSavedTime(nowTime);
 
     if (showToastMsg && saved) {
       showToast('success', `Đã lưu bản nháp ${saved.tripNumber} thành công (${nowTime}).`);
@@ -1467,13 +1978,32 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
       return;
     }
 
-    if (evaluation.hasBlockingFailure) {
-      showToast('error', 'Hồ sơ có lỗi vi phạm điều kiện an toàn (Đỏ). Vui lòng khắc phục các điểm chặn trước khi gửi.');
+    if (step6InspectionSummary.hasBlockingFailure) {
+      const firstFailed = step6InspectionSummary.items.find((i) => i.status === 'FAILED');
+      showToast(
+        'error',
+        firstFailed
+          ? `[${firstFailed.code}] ${firstFailed.message}`
+          : 'Hồ sơ có hạng mục kiểm tra chưa đạt. Vui lòng khắc phục trước khi gửi.'
+      );
       return;
     }
 
-    if (evaluation.hasWarning && !acceptedWarningConsent) {
-      showToast('error', 'Vui lòng tích vào ô "Tôi đã đọc và xác nhận các cảnh báo trên" trước khi gửi hồ sơ.');
+    if (evaluation.hasBlockingFailure) {
+      const firstBlocker = evaluation.results.find(
+        (r) => r.status === 'FAILED' && r.severity === 'BLOCKING'
+      );
+      showToast(
+        'error',
+        firstBlocker
+          ? `[${firstBlocker.ruleCode}] ${firstBlocker.message}`
+          : 'Hồ sơ có lỗi vi phạm điều kiện an toàn. Vui lòng khắc phục trước khi gửi.'
+      );
+      return;
+    }
+
+    if (step6InspectionSummary.hasWarning && !acceptedWarningConsent) {
+      showToast('error', 'Vui lòng tích vào ô xác nhận các cảnh báo trước khi gửi hồ sơ.');
       return;
     }
 
@@ -1501,35 +2031,16 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
       })
       .catch(() => {});
 
+    const destinationText =
+      normalizeStatus(submittedTrip.status) === 'CHO_SO_XU_LY'
+        ? 'Hồ sơ đã chuyển thẳng về Chuyên viên Phòng ATGT (Sở Xây dựng) tiếp tục xử lý.'
+        : `Hồ sơ đã chuyển về Ban Quản lý Cảng (${submittedTrip.departurePortName}) kiểm tra tại bến.`;
     showToast(
       'success',
-      `Nộp hồ sơ ${submittedTrip.tripNumber} thành công! Hồ sơ đã được chuyển trực tiếp trong ứng dụng.`
+      `Nộp hồ sơ ${submittedTrip.tripNumber} thành công! ${destinationText}`
     );
     setTimeout(() => onNavigate('trip-detail', submittedTrip.id), 650);
   };
-
-  // AI rà soát bất thường (tự động chạy khi sang bước kiểm tra & nộp hồ sơ - Bước 2 của quy trình)
-  const autoAiStep6RanRef = useRef<boolean>(false);
-  const handleRunAiAnalysis = async () => {
-    setIsAiAnalyzing(true);
-    try {
-      const report = await GeminiService.analyzeTripAnomalies(currentDraftTrip);
-      setAiAnalysis(report);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsAiAnalyzing(false);
-    }
-  };
-
-  useEffect(() => {
-    if (currentStep === 6 && !autoAiStep6RanRef.current && !isAiAnalyzing) {
-      autoAiStep6RanRef.current = true;
-      void handleRunAiAnalysis();
-    } else if (currentStep !== 6) {
-      autoAiStep6RanRef.current = false;
-    }
-  }, [currentStep]);
 
   // Chat AI
   const handleSendAiChatMessage = async () => {
@@ -1619,13 +2130,19 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
           <div className="flex-1 space-y-1">
             <h3 className="text-sm font-black uppercase tracking-wide">
               HỒ SƠ BỊ TRẢ LẠI TỪ {getRejectedOriginLabel(existingTrip).toUpperCase()}
-              {existingTrip.lastReturnInfo?.traBoiName || existingTrip.rejectedByName
-                ? ` — CÁN BỘ: ${existingTrip.lastReturnInfo?.traBoiName || existingTrip.rejectedByName}`
+              {existingTrip.lastReturnInfo?.nguoiTraTen ||
+              existingTrip.lastReturnInfo?.traBoiName ||
+              existingTrip.rejectedByName
+                ? ` — CÁN BỘ: ${
+                    existingTrip.lastReturnInfo?.nguoiTraTen ||
+                    existingTrip.lastReturnInfo?.traBoiName ||
+                    existingTrip.rejectedByName
+                  }`
                 : ''}
             </h3>
             {existingTrip.lastReturnInfo?.phamVi && (
               <p className="text-[11px] font-bold text-amber-200">
-                Phạm vi trả: {existingTrip.lastReturnInfo.phamVi}
+                Phạm vi yêu cầu chỉnh sửa: {getReturnScopeLabel(existingTrip.lastReturnInfo.phamVi)}
               </p>
             )}
             <p className="text-xs text-red-100">
@@ -1640,41 +2157,12 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
               {existingTrip.lastReturnInfo?.benTra === 'BIEN_PHONG'
                 ? 'Quy tắc R12: Biên phòng trả lại do phát hiện sai lệch người/hành khách tại bến. Khi gửi lại, Giấy phép cũ sẽ bị thu hồi và hồ sơ đi lại qua BQL Cảng → Sở.'
                 : existingTrip.lastReturnInfo?.benTra === 'CHUYEN_VIEN'
-                ? 'Sau khi sửa và gửi lại, hồ sơ sẽ chuyển thẳng lại Chuyên viên Sở tiếp tục xử lý.'
-                : 'Vui lòng rà soát, chỉnh sửa theo yêu cầu và sang Bước 6 để gửi lại hồ sơ.'}
+                ? 'Chuyên viên Phòng ATGT xác định thiếu sót thuộc hồ sơ Chủ tàu. Sau khi chỉnh sửa và nộp lại ở Bước 6, hồ sơ sẽ chuyển thẳng về Chuyên viên Sở tiếp tục xử lý.'
+                : 'Ban Quản lý Cảng yêu cầu chỉnh sửa/bổ sung. Sau khi sửa và nộp lại ở Bước 6, hồ sơ sẽ chuyển lại Ban Quản lý Cảng kiểm tra.'}
             </p>
           </div>
         </div>
       )}
-
-      <CoastalPageHero
-        title={existingTrip ? `Chỉnh sửa hồ sơ: ${existingTrip.tripNumber}` : 'Khai báo Hồ sơ xin cấp Lệnh rời bến VR-SB'}
-        subtitle="Thông tin tàu, thuyền viên tự điền; hệ thống tự động kiểm tra quy tắc an toàn R1–R11 và AI rà soát bất thường trước khi chuyển BQL Cảng."
-        icon={<FileText className="w-7 h-7" />}
-        badge={
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/20 text-white border border-white/30 text-[11px] font-bold">
-            Bước 1 &amp; 2 quy trình • Tạo chuyến &amp; Kiểm tra R1–R11, AI
-          </span>
-        }
-        rightContent={
-          <div className="flex flex-wrap items-center gap-2">
-            {isOnline ? (
-              <span className="flex items-center gap-1.5 text-emerald-900 bg-[#daf5e7] px-3 py-1.5 rounded-full text-xs font-extrabold border border-[#a9e4c5]">
-                <Wifi className="w-3.5 h-3.5" /> Tự lưu nháp
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 text-amber-900 bg-amber-100 px-3 py-1.5 rounded-full text-xs font-extrabold border border-amber-300">
-                <WifiOff className="w-3.5 h-3.5" /> Lưu offline
-              </span>
-            )}
-            {lastAutoSavedTime && (
-              <span className="px-3 py-1.5 rounded-full bg-white/15 border border-white/25 text-white text-xs font-semibold">
-                Lưu lúc {lastAutoSavedTime}
-              </span>
-            )}
-          </div>
-        }
-      />
 
       {/* THANH TIẾN ĐỘ 6 BƯỚC (STEPPER 6 BƯỚC) */}
       <div className="bg-white/95 rounded-[20px] sm:rounded-[24px] border border-[#dce8f7] shadow-[0_12px_32px_-12px_rgba(10,60,130,0.12)] p-4 sm:p-5">
@@ -1689,7 +2177,7 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
               {currentStep === 3 && 'Danh sách hành khách vận tải'}
               {currentStep === 4 && 'Hàng hóa, mớn nước & ghi chú'}
               {currentStep === 5 && 'Tải lên giấy tờ đính kèm'}
-              {currentStep === 6 && 'Kiểm tra R1–R9, AI rà soát bất thường & Nộp hồ sơ (Bước 2 tự động)'}
+              {currentStep === 6 && 'Danh sách kết quả kiểm tra tàu, thuyền viên, hàng hóa & giấy tờ'}
             </span>
           </div>
           <span className="sm:hidden text-xs font-bold text-[#0d62e8]">
@@ -1707,7 +2195,7 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
           {[
             { step: 1, label: '1. Thông tin chung', icon: Ship },
             { step: 2, label: '2. Thuyền viên', icon: Users },
-            { step: 3, label: '3. Khách', icon: UserCheck },
+            { step: 3, label: '3. Hành khách', icon: UserCheck },
             { step: 4, label: '4. Hàng hóa', icon: Package },
             { step: 5, label: '5. Giấy tờ', icon: Paperclip },
             { step: 6, label: '6. Nộp hồ sơ', icon: ShieldCheck },
@@ -1746,513 +2234,546 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
       <div className="bg-white/95 rounded-[20px] sm:rounded-[24px] border border-[#dce8f7] shadow-[0_12px_32px_-12px_rgba(10,60,130,0.12)] overflow-hidden">
         {/* NỘI DUNG TỪNG BƯỚC */}
         <div className="p-5 sm:p-7">
-          {/* BƯỚC 1: THÔNG TIN CHUNG */}
+          {/* BƯỚC 1: THÔNG TIN CHUNG (DẠNG DANH SÁCH MÀU NỀN CHẴN LẺ) */}
           {currentStep === 1 && (
-            <div className="space-y-6">
-          <div className="border-b pb-3 flex items-center justify-between flex-wrap gap-2">
-            <div>
-              <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-                <Ship className="w-5 h-5 text-blue-600" />
-                Bước 1: Thông tin chung
-              </h2>
-              <p className="text-xs text-slate-500">
-                Kê khai thông tin chuyến đi, chọn phương tiện VR-SB và thời gian rời bến
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleCopyFromPreviousTrip}
-                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold flex items-center gap-1.5 border border-slate-200 cursor-pointer text-xs"
-                title="Sao chép toàn bộ thông tin từ chuyến trước của tàu này"
-              >
-                <Copy className="w-3.5 h-3.5 text-blue-600" />
-                <span>Lấy chuyến trước</span>
-              </button>
-
-              {/* Chọn Đến hoặc Rời */}
-              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
-                <button
-                  type="button"
-                  onClick={() => setMovementType('DEPARTURE')}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                    movementType === 'DEPARTURE' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Rời bến
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMovementType('ARRIVAL')}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                    movementType === 'ARRIVAL' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  Đến bến
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Người làm thủ tục xuất bến (Tự động theo tài khoản đăng nhập) */}
-          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <UserCheck className="w-4 h-4 text-blue-600" />
-                <span className="text-xs font-bold text-slate-800">
-                  Người làm thủ tục: <span className="text-blue-900 font-extrabold">{declarantName || currentUser.fullName}</span> ({declarantPhone || currentUser.phone})
-                </span>
-              </div>
-              <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200 transition">
-                <input
-                  type="checkbox"
-                  checked={declaredByStaff}
-                  onChange={(e) => setDeclaredByStaff(e.target.checked)}
-                  className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
-                />
-                Ban QL Cảng khai thay
-              </label>
-            </div>
-
-            {declaredByStaff && (
-              <div className="pt-2 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs animate-in fade-in">
+            <div className="space-y-5">
+              <div className="border-b border-slate-200 pb-3 flex items-center justify-between flex-wrap gap-2">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                    Họ tên cán bộ khai thay:
-                  </label>
-                  <input
-                    type="text"
-                    value={declarantName}
-                    onChange={(e) => setDeclarantName(e.target.value)}
-                    className="w-full p-2 text-xs font-bold border border-slate-300 rounded-lg bg-white"
-                  />
+                  <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                    <Ship className="w-5 h-5 text-blue-600 shrink-0" />
+                    Bước 1: Thông tin chung
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Kê khai thông tin chuyến đi, phương tiện VR-SB, tuyến hành trình và thời gian rời bến
+                  </p>
                 </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                    Số điện thoại cán bộ:
-                  </label>
-                  <input
-                    type="text"
-                    value={declarantPhone}
-                    onChange={(e) => setDeclarantPhone(e.target.value)}
-                    className="w-full p-2 text-xs font-semibold border border-slate-300 rounded-lg bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-amber-800 mb-0.5">
-                    Lý do khai thay:
-                  </label>
-                  <input
-                    type="text"
-                    value={staffReason}
-                    onChange={(e) => setStaffReason(e.target.value)}
-                    placeholder="Thuyền trưởng ủy quyền..."
-                    className="w-full p-2 text-xs border border-amber-300 rounded-lg bg-amber-50 text-slate-800"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
 
-          {/* Phương tiện & Thông số tự điền */}
-          <div className="space-y-4">
-            <h3 className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
-              <Ship className="w-4 h-4 text-blue-600" />
-              Phương tiện VR-SB & Hô hiệu
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  Phương tiện VR-SB (*):
-                </label>
-                {currentUser.role === 'CAPTAIN' ? (
-                  <div className="p-3 bg-blue-50/90 border-2 border-blue-400 rounded-xl flex items-center justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold shrink-0">
-                        <Ship className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-black text-slate-900">
-                          {selectedVessel?.name} ({selectedVessel?.regNumber})
-                        </p>
-                        <p className="text-[11px] text-slate-600 font-semibold">
-                          Tàu phụ trách theo tài khoản • Sức chở: {selectedVessel?.maxPassengers} khách
-                        </p>
-                      </div>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-blue-600 text-white shrink-0">
-                      Tàu của bạn
-                    </span>
-                  </div>
-                ) : (
-                  <select
-                    value={selectedVesselId}
-                    onChange={(e) => setSelectedVesselId(e.target.value)}
-                    className="w-full p-3 text-base sm:text-sm font-black text-slate-900 border-2 border-slate-300 rounded-xl bg-white focus:border-blue-600"
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleCopyFromPreviousTrip}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold inline-flex items-center gap-1.5 border border-slate-200 cursor-pointer text-xs whitespace-nowrap shrink-0"
+                    title="Sao chép toàn bộ thông tin từ chuyến trước của tàu này"
                   >
-                    {selectableVessels.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} ({v.regNumber}) - Sức chở: {v.maxPassengers} người - Hàng: {v.maxCargoTons}t
-                      </option>
-                    ))}
-                  </select>
-                )}
+                    <Copy className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Lấy chuyến trước</span>
+                  </button>
 
-                {selectedVessel && (
-                  <div className="mt-2 p-3 bg-blue-50/70 rounded-xl border border-blue-200 text-xs text-slate-700 space-y-1">
-                    <div className="flex justify-between">
-                      <span>Số hiệu / Hô hiệu: <strong>{selectedVessel.regNumber} ({selectedVessel.callSign || 'QNG 0237'})</strong></span>
-                      <span>Quốc tịch: <strong>VIỆT NAM</strong></span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Sức chở người: <strong className="text-blue-900">{selectedVessel.maxPassengers} khách</strong></span>
-                      <span>Trọng tải hàng: <strong className="text-blue-900">{selectedVessel.maxCargoTons} tấn</strong></span>
-                    </div>
-                    <div>
-                      Hạn đăng kiểm: <strong className={selectedVessel.registryExpireDate < todayIso ? 'text-red-600 font-bold' : 'text-slate-800'}>{selectedVessel.registryExpireDate}</strong>
-                    </div>
-                    <div>Chủ tàu: <strong>{selectedVessel.ownerName}</strong> ({selectedVessel.ownerPhone})</div>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Số chuyến trong ngày (*):
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={tripSeqOfDay}
-                      onChange={(e) => setTripSeqOfDay(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full p-2.5 text-base sm:text-sm font-bold border border-slate-300 rounded-xl bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Vị trí tại cảng / Cầu bến:
-                    </label>
-                    <input
-                      type="text"
-                      value={berthLocation}
-                      onChange={(e) => setBerthLocation(e.target.value)}
-                      className="w-full p-2.5 text-base sm:text-sm border border-slate-300 rounded-xl bg-white"
-                    />
-                  </div>
-                </div>
-
-                {/* Số IMO */}
-                <div>
-                  {!showImoInput ? (
+                  {/* Chọn Đến hoặc Rời */}
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 shrink-0">
                     <button
                       type="button"
-                      onClick={() => setShowImoInput(true)}
-                      className="text-[11px] font-semibold text-blue-600 hover:underline cursor-pointer"
+                      onClick={() => setMovementType('DEPARTURE')}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                        movementType === 'DEPARTURE' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
                     >
-                      + Nhập số IMO (Phương tiện nội địa ẩn mặc định)
+                      Rời bến
                     </button>
-                  ) : (
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-0.5">
-                        Số IMO (Nếu có):
-                      </label>
-                      <input
-                        type="text"
-                        value={imoNumber}
-                        onChange={(e) => setImoNumber(e.target.value)}
-                        placeholder="VD: 9876543"
-                        className="w-full p-2 text-xs border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Tuyến & Thời gian khởi hành */}
-          <div className="space-y-3 pt-3 border-t">
-            <h3 className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
-              <Clock className="w-4 h-4 text-blue-600" />
-              Cảng rời / Cảng đích & Thời gian khởi hành
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Tuyến hành trình (*):</label>
-                <select
-                  value={selectedRouteId}
-                  onChange={(e) => {
-                    setSelectedRouteId(e.target.value);
-                    const r = routes.find((item) => item.id === e.target.value);
-                    if (r) {
-                      setDeparturePortId(r.fromPortId);
-                      setArrivalPortId(r.toPortId);
-                    }
-                  }}
-                  className="w-full p-2.5 font-bold border border-slate-300 rounded-xl bg-white"
-                >
-                  {routes.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name} ({r.distanceNauticalMiles} hải lý ~ {r.normalDurationMinutes} phút)
-                    </option>
-                  ))}
-                </select>
-
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">Cảng đi:</label>
-                    <input
-                      type="text"
-                      disabled
-                      value={ports.find((p) => p.id === departurePortId)?.name || 'Bến Lý Sơn'}
-                      className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-600 text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600">Cảng đích:</label>
-                    <input
-                      type="text"
-                      disabled
-                      value={ports.find((p) => p.id === arrivalPortId)?.name || 'Bến Đảo Bé'}
-                      className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-600 text-xs"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Bộ chọn thời gian: Ngày + Giờ + Phút (Không nhập tự do) */}
-              <div>
-                <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
-                  <label className="block font-black text-slate-900 text-sm sm:text-base">
-                    Thời gian dự kiến rời bến (*) (Giờ 00-23, Phút 00-59):
-                  </label>
-                  <span
-                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-black ${
-                      departureValidation.isTooSoon
-                        ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                        : 'bg-emerald-50 text-emerald-800 border border-emerald-300'
-                    }`}
-                  >
-                    {departureValidation.isTooSoon ? '✕ Nhỏ hơn hiện tại + 30 phút' : '✓ Hợp lệ (≥ hiện tại + 30p)'}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block text-[11px] sm:text-xs text-slate-600 uppercase font-black mb-1">
-                      Ngày:
-                    </label>
-                    <input
-                      type="date"
-                      value={departureDate}
-                      onChange={(e) => setDepartureDate(e.target.value)}
-                      className={`w-full p-2.5 text-xs sm:text-sm font-bold border rounded-xl bg-white ${
-                        departureValidation.isTooSoon
-                          ? 'border-rose-400 focus:ring-rose-500'
-                          : 'border-slate-300 focus:ring-blue-500'
-                      }`}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] sm:text-xs text-slate-600 uppercase font-black mb-1">
-                      Giờ (00-23):
-                    </label>
-                    <select
-                      value={departureHour}
-                      onChange={(e) => setDepartureHour(e.target.value)}
-                      className={`w-full p-2.5 text-base sm:text-sm font-bold border rounded-xl bg-white ${
-                        departureValidation.isTooSoon
-                          ? 'border-rose-400 focus:ring-rose-500'
-                          : 'border-slate-300 focus:ring-blue-500'
-                      }`}
-                    >
-                      {Array.from({ length: 24 }).map((_, i) => {
-                        const h = String(i).padStart(2, '0');
-                        return <option key={h} value={h}>{h} giờ</option>;
-                      })}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] sm:text-xs text-slate-600 uppercase font-black mb-1">
-                      Phút (00-59):
-                    </label>
-                    <select
-                      value={departureMinute}
-                      onChange={(e) => setDepartureMinute(e.target.value)}
-                      className={`w-full p-2.5 text-base sm:text-sm font-bold border rounded-xl bg-white ${
-                        departureValidation.isTooSoon
-                          ? 'border-rose-400 focus:ring-rose-500'
-                          : 'border-slate-300 focus:ring-blue-500'
-                      }`}
-                    >
-                      {['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'].map((m) => (
-                        <option key={m} value={m}>{m} phút</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* THÔNG BÁO RÀNG BUỘC THỜI GIAN RỜI BẾN */}
-                {departureValidation.isTooSoon ? (
-                  <div className="mt-3 p-3.5 bg-rose-50 border-2 border-rose-400 rounded-xl text-xs sm:text-sm text-rose-950 space-y-2 animate-in fade-in">
-                    <div className="flex items-center gap-2">
-                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-                      <span className="font-black text-rose-900 text-sm">
-                        Thời gian rời bến không hợp lệ (Nhỏ hơn thời gian hiện tại + 30 phút)
-                      </span>
-                    </div>
-                    <p className="text-xs text-rose-800 leading-relaxed font-semibold">
-                      Quy định: Thời gian dự kiến rời bến không được nhỏ hơn thời gian hiện tại + 30 phút. Sớm nhất cho phép rời bến từ: <strong className="font-bold underline text-rose-950">{departureValidation.minTimeString}</strong> (để Cảng vụ và Sở GTVT có đủ thời gian thẩm định và ký ban hành lệnh).
-                    </p>
                     <button
                       type="button"
-                      onClick={handleSetQuickValidTime}
-                      className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-lg text-xs font-black transition cursor-pointer shadow-xs inline-flex items-center gap-2"
+                      onClick={() => setMovementType('ARRIVAL')}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                        movementType === 'ARRIVAL' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
                     >
-                      <Clock className="w-4 h-4" />
-                      Tự động đặt giờ hợp lệ nhanh (+45 phút)
+                      Đến bến
                     </button>
                   </div>
-                ) : (
-                  <div className="mt-2.5 flex items-center justify-between flex-wrap gap-2 text-xs">
-                    <p className="text-slate-700">
-                      Thời gian chọn:{' '}
-                      <strong className="text-blue-950 font-black text-sm">
-                        {departureHour}:{departureMinute} ngày {formatDate(departureDate)}
-                      </strong>
-                    </p>
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold text-emerald-900 bg-emerald-50 border border-emerald-300">
-                      <Check className="w-3.5 h-3.5 text-emerald-600" /> Hợp lệ (cách hiện tại &gt; 30 phút)
-                    </span>
-                  </div>
-                )}
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Mớn nước & Kỹ thuật */}
-          <div className="pt-3 border-t">
-            <h3 className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5 mb-2">
-              <Info className="w-4 h-4 text-blue-600" />
-              Mớn nước thực tế trước khi rời bến
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">Mớn nước mũi (m):</label>
-                <input
-                  type="number"
-                  step="0.05"
-                  value={draftForward}
-                  onChange={(e) => setDraftForward(parseFloat(e.target.value) || 0.6)}
-                  className="w-full p-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">Mớn nước lái (m):</label>
-                <input
-                  type="number"
-                  step="0.05"
-                  value={draftAft}
-                  onChange={(e) => setDraftAft(parseFloat(e.target.value) || 0.9)}
-                  className="w-full p-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">Dung tích toàn phần:</label>
-                <input
-                  type="text"
-                  disabled
-                  value={`${selectedVessel?.grossTonnage || 6} GT`}
-                  className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-600"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-600 font-semibold mb-1">Dung tích có ích:</label>
-                <input
-                  type="text"
-                  disabled
-                  value={`${selectedVessel?.netTonnage || 3} NT`}
-                  className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-600"
-                />
+              {/* Bảng danh sách thông tin chung với màu nền chẵn / lẻ */}
+              <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] text-left text-xs border-collapse">
+                    <thead className="bg-[#edf4fe] text-[#07244d] text-[11px] font-extrabold border-b border-slate-200">
+                      <tr>
+                        <th className="py-3 px-3 w-12 text-center">STT</th>
+                        <th className="py-3 px-3 w-[25%]">Hạng mục kê khai</th>
+                        <th className="py-3 px-3">Nội dung khai báo</th>
+                        <th className="py-3 px-3 w-[30%]">Thông tin đối chiếu / Ghi chú</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {/* Dòng 1 (lẻ) - Người làm thủ tục */}
+                      <tr className="bg-white hover:bg-blue-50/40 transition-colors">
+                        <td className="py-3.5 px-3 text-center font-semibold text-slate-500 tabular-nums align-top">
+                          1
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <p className="font-bold text-slate-900">Người làm thủ tục</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">Khai trực tiếp hoặc khai thay</p>
+                        </td>
+                        <td className="py-3.5 px-3 align-top space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-bold text-slate-800">
+                              <strong className="text-blue-950">{declarantName || currentUser.fullName}</strong>
+                              <span className="mx-1.5 text-slate-400" aria-hidden="true">·</span>
+                              <span className="font-mono text-slate-700">{declarantPhone || currentUser.phone}</span>
+                            </span>
+                            <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-bold text-blue-700 hover:text-blue-900">
+                              <input
+                                type="checkbox"
+                                checked={declaredByStaff}
+                                onChange={(e) => setDeclaredByStaff(e.target.checked)}
+                                className="rounded text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                              />
+                              <span>Ban QL Cảng khai thay</span>
+                            </label>
+                          </div>
+
+                          {declaredByStaff && (
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-200">
+                              <div>
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Họ tên cán bộ khai thay:
+                                </label>
+                                <input
+                                  type="text"
+                                  value={declarantName}
+                                  onChange={(e) => setDeclarantName(e.target.value)}
+                                  className="w-full px-2.5 py-1.5 text-xs font-bold border border-slate-300 rounded-lg bg-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  SĐT cán bộ:
+                                </label>
+                                <input
+                                  type="text"
+                                  value={declarantPhone}
+                                  onChange={(e) => setDeclarantPhone(e.target.value)}
+                                  className="w-full px-2.5 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-amber-800 mb-0.5">
+                                  Lý do khai thay:
+                                </label>
+                                <input
+                                  type="text"
+                                  value={staffReason}
+                                  onChange={(e) => setStaffReason(e.target.value)}
+                                  placeholder="Thuyền trưởng ủy quyền..."
+                                  className="w-full px-2.5 py-1.5 text-xs border border-amber-300 rounded-lg bg-amber-50 text-slate-800"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-3 align-top text-[11px] text-slate-600">
+                          {declaredByStaff
+                            ? 'Hồ sơ ghi nhận cán bộ Ban Quản lý Cảng thực hiện kê khai thay.'
+                            : 'Tự động điền theo tài khoản đang đăng nhập.'}
+                        </td>
+                      </tr>
+
+                      {/* Dòng 2 (chẵn) - Phương tiện VR-SB */}
+                      <tr className="bg-[#f1f6fd] hover:bg-blue-100/50 transition-colors">
+                        <td className="py-3.5 px-3 text-center font-semibold text-slate-500 tabular-nums align-top">
+                          2
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <p className="font-bold text-slate-900">Phương tiện VR-SB (*)</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">Tàu thực hiện chuyến đi</p>
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          {currentUser.role === 'CAPTAIN' ? (
+                            <div className="flex items-center justify-between gap-2 px-3 py-2 bg-white border border-blue-300 rounded-xl">
+                              <div>
+                                <p className="text-sm font-black text-slate-900">
+                                  {selectedVessel?.name} ({selectedVessel?.regNumber})
+                                </p>
+                                <p className="text-[11px] text-blue-700 font-semibold">
+                                  Tàu phụ trách theo tài khoản thuyền trưởng
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <select
+                              value={selectedVesselId}
+                              onChange={(e) => setSelectedVesselId(e.target.value)}
+                              className="w-full px-3 py-2 text-xs sm:text-sm font-extrabold text-slate-900 border border-slate-300 rounded-xl bg-white focus:border-blue-600"
+                            >
+                              {selectableVessels.map((v) => (
+                                <option key={v.id} value={v.id}>
+                                  {v.name} ({v.regNumber}) · {v.maxPassengers} khách · {v.maxCargoTons} tấn
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-3 align-top text-[11px] text-slate-700 space-y-1 tabular-nums">
+                          {selectedVessel && (
+                            <>
+                              <p>
+                                Số hiệu / Hô hiệu: <strong className="font-mono text-slate-900">{selectedVessel.regNumber}</strong> ({selectedVessel.callSign || 'QNG 0237'}) · <strong>VIỆT NAM</strong>
+                              </p>
+                              <p>
+                                Sức chở: <strong className="text-blue-900">{selectedVessel.maxPassengers} khách</strong> · Tải trọng: <strong className="text-blue-900">{selectedVessel.maxCargoTons} tấn</strong>
+                              </p>
+                              <p>
+                                Hạn đăng kiểm:{' '}
+                                <strong className={selectedVessel.registryExpireDate < todayIso ? 'text-red-600' : 'text-slate-900'}>
+                                  {selectedVessel.registryExpireDate}
+                                </strong>
+                              </p>
+                              <p className="text-slate-600">
+                                Chủ tàu: <strong className="text-slate-800">{selectedVessel.ownerName}</strong> ({selectedVessel.ownerPhone})
+                              </p>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+
+                      {/* Dòng 3 (lẻ) - Số chuyến trong ngày */}
+                      <tr className="bg-white hover:bg-blue-50/40 transition-colors">
+                        <td className="py-3.5 px-3 text-center font-semibold text-slate-500 tabular-nums align-top">
+                          3
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <p className="font-bold text-slate-900">Số chuyến trong ngày (*)</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">Thứ tự chuyến xuất/nhập bến</p>
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <input
+                            type="number"
+                            min={1}
+                            max={20}
+                            value={tripSeqOfDay}
+                            onChange={(e) => setTripSeqOfDay(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-36 px-3 py-2 text-xs sm:text-sm font-bold border border-slate-300 rounded-xl bg-white tabular-nums"
+                          />
+                        </td>
+                        <td className="py-3.5 px-3 align-top text-[11px] text-slate-600">
+                          Số thứ tự chuyến trong ngày của tàu ({movementType === 'DEPARTURE' ? 'Lượt rời bến' : 'Lượt đến bến'}).
+                        </td>
+                      </tr>
+
+                      {/* Dòng 4 (chẵn) - Vị trí cầu bến & Số IMO */}
+                      <tr className="bg-[#f1f6fd] hover:bg-blue-100/50 transition-colors">
+                        <td className="py-3.5 px-3 text-center font-semibold text-slate-500 tabular-nums align-top">
+                          4
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <p className="font-bold text-slate-900">Vị trí tại cảng / Cầu bến</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">Cầu cảng neo đậu &amp; số IMO</p>
+                        </td>
+                        <td className="py-3.5 px-3 align-top space-y-2">
+                          <input
+                            type="text"
+                            value={berthLocation}
+                            onChange={(e) => setBerthLocation(e.target.value)}
+                            className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-300 rounded-xl bg-white"
+                          />
+                          {!showImoInput ? (
+                            <button
+                              type="button"
+                              onClick={() => setShowImoInput(true)}
+                              className="text-[11px] font-semibold text-blue-700 hover:underline cursor-pointer"
+                            >
+                              + Nhập số IMO (nếu có)
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] font-semibold text-slate-600 shrink-0">Số IMO:</span>
+                              <input
+                                type="text"
+                                value={imoNumber}
+                                onChange={(e) => setImoNumber(e.target.value)}
+                                placeholder="VD: 9876543"
+                                className="flex-1 px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-mono"
+                              />
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-3 align-top text-[11px] text-slate-600">
+                          Phương tiện nội địa ẩn số IMO mặc định; bấm mở rộng nếu tàu có số IMO.
+                        </td>
+                      </tr>
+
+                      {/* Dòng 5 (lẻ) - Tuyến hành trình & Cảng đi / đích */}
+                      <tr className="bg-white hover:bg-blue-50/40 transition-colors">
+                        <td className="py-3.5 px-3 text-center font-semibold text-slate-500 tabular-nums align-top">
+                          5
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <p className="font-bold text-slate-900">Tuyến hành trình (*)</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">Cảng rời &amp; cảng đích</p>
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <select
+                            value={selectedRouteId}
+                            onChange={(e) => {
+                              setSelectedRouteId(e.target.value);
+                              const r = routes.find((item) => item.id === e.target.value);
+                              if (r) {
+                                setDeparturePortId(r.fromPortId);
+                                setArrivalPortId(r.toPortId);
+                              }
+                            }}
+                            className="w-full px-3 py-2 text-xs sm:text-sm font-bold border border-slate-300 rounded-xl bg-white"
+                          >
+                            {routes.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.name} ({r.distanceNauticalMiles} hải lý ~ {r.normalDurationMinutes} phút)
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-3.5 px-3 align-top text-[11px] text-slate-700 space-y-1">
+                          <p>
+                            Cảng đi: <strong className="text-slate-900">{ports.find((p) => p.id === departurePortId)?.name || 'Bến Lý Sơn'}</strong>
+                          </p>
+                          <p>
+                            Cảng đích: <strong className="text-slate-900">{ports.find((p) => p.id === arrivalPortId)?.name || 'Bến Đảo Bé'}</strong>
+                          </p>
+                        </td>
+                      </tr>
+
+                      {/* Dòng 6 (chẵn) - Thời gian dự kiến rời bến */}
+                      <tr
+                        className={
+                          departureValidation.isTooSoon
+                            ? 'bg-rose-50/80 hover:bg-rose-50 transition-colors'
+                            : 'bg-[#f1f6fd] hover:bg-blue-100/50 transition-colors'
+                        }
+                      >
+                        <td className="py-3.5 px-3 text-center font-semibold text-slate-500 tabular-nums align-top">
+                          6
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <p className="font-bold text-slate-900">Thời gian dự kiến rời bến (*)</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">Tối thiểu sau hiện tại 30 phút</p>
+                        </td>
+                        <td className="py-3.5 px-3 align-top space-y-2">
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="block text-[10px] text-slate-600 font-bold mb-1">Ngày</label>
+                              <input
+                                type="date"
+                                value={departureDate}
+                                onChange={(e) => setDepartureDate(e.target.value)}
+                                className={`w-full px-2.5 py-2 text-xs font-bold border rounded-xl bg-white tabular-nums ${
+                                  departureValidation.isTooSoon
+                                    ? 'border-rose-400 focus:ring-rose-500'
+                                    : 'border-slate-300 focus:ring-blue-500'
+                                }`}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-slate-600 font-bold mb-1">Giờ (00–23)</label>
+                              <select
+                                value={departureHour}
+                                onChange={(e) => setDepartureHour(e.target.value)}
+                                className={`w-full px-2.5 py-2 text-xs font-bold border rounded-xl bg-white tabular-nums ${
+                                  departureValidation.isTooSoon
+                                    ? 'border-rose-400 focus:ring-rose-500'
+                                    : 'border-slate-300 focus:ring-blue-500'
+                                }`}
+                              >
+                                {Array.from({ length: 24 }).map((_, i) => {
+                                  const h = String(i).padStart(2, '0');
+                                  return <option key={h} value={h}>{h} giờ</option>;
+                                })}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-slate-600 font-bold mb-1">Phút (00–59)</label>
+                              <select
+                                value={departureMinute}
+                                onChange={(e) => setDepartureMinute(e.target.value)}
+                                className={`w-full px-2.5 py-2 text-xs font-bold border rounded-xl bg-white tabular-nums ${
+                                  departureValidation.isTooSoon
+                                    ? 'border-rose-400 focus:ring-rose-500'
+                                    : 'border-slate-300 focus:ring-blue-500'
+                                }`}
+                              >
+                                {['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'].map((m) => (
+                                  <option key={m} value={m}>{m} phút</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {departureValidation.isTooSoon && (
+                            <button
+                              type="button"
+                              onClick={handleSetQuickValidTime}
+                              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-bold transition cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>Đặt giờ hợp lệ nhanh (+45 phút)</span>
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-3 align-top text-[11px] space-y-1 tabular-nums">
+                          {departureValidation.isTooSoon ? (
+                            <>
+                              <p className="font-extrabold text-rose-700 inline-flex items-center gap-1">
+                                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                                <span>Nhỏ hơn hiện tại + 30 phút</span>
+                              </p>
+                              <p className="text-rose-800 leading-relaxed">
+                                Sớm nhất cho phép từ: <strong className="underline">{departureValidation.minTimeString}</strong>.
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="font-bold text-emerald-700 inline-flex items-center gap-1">
+                                <Check className="w-3.5 h-3.5 shrink-0" />
+                                <span>Hợp lệ (≥ hiện tại + 30 phút)</span>
+                              </p>
+                              <p className="text-slate-700">
+                                Giờ chọn:{' '}
+                                <strong className="text-blue-950">
+                                  {departureHour}:{departureMinute} ngày {formatDate(departureDate)}
+                                </strong>
+                              </p>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+
+                      {/* Dòng 7 (lẻ) - Mớn nước & Dung tích */}
+                      <tr className="bg-white hover:bg-blue-50/40 transition-colors">
+                        <td className="py-3.5 px-3 text-center font-semibold text-slate-500 tabular-nums align-top">
+                          7
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <p className="font-bold text-slate-900">Mớn nước thực tế trước rời bến</p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">Thông số kỹ thuật tàu</p>
+                        </td>
+                        <td className="py-3.5 px-3 align-top">
+                          <div className="grid grid-cols-2 gap-3 max-w-md">
+                            <div>
+                              <label className="block text-[10px] text-slate-600 font-bold mb-1">Mớn nước mũi (m)</label>
+                              <input
+                                type="number"
+                                step="0.05"
+                                value={draftForward}
+                                onChange={(e) => setDraftForward(parseFloat(e.target.value) || 0.6)}
+                                className="w-full px-2.5 py-1.5 text-xs font-bold border border-slate-300 rounded-lg bg-white tabular-nums"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-slate-600 font-bold mb-1">Mớn nước lái (m)</label>
+                              <input
+                                type="number"
+                                step="0.05"
+                                value={draftAft}
+                                onChange={(e) => setDraftAft(parseFloat(e.target.value) || 0.9)}
+                                className="w-full px-2.5 py-1.5 text-xs font-bold border border-slate-300 rounded-lg bg-white tabular-nums"
+                              />
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-3 align-top text-[11px] text-slate-700 space-y-1 tabular-nums">
+                          <p>
+                            Dung tích toàn phần: <strong className="text-slate-900">{selectedVessel?.grossTonnage || 6} GT</strong>
+                          </p>
+                          <p>
+                            Dung tích có ích: <strong className="text-slate-900">{selectedVessel?.netTonnage || 3} NT</strong>
+                          </p>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
       {/* BƯỚC 2: THUYỀN VIÊN (DANH SÁCH THUYỀN VIÊN) */}
-      {currentStep === 2 && (
-        <div className="space-y-6">
-          <div className="border-b pb-3 flex items-center justify-between flex-wrap gap-2">
+      {currentStep === 2 && (() => {
+        const readyCrewCertCount = crewCertChecks.filter((c) => !c.requiresStep5Upload).length;
+        const missingCrewCertCount = missingOrExpiredCrewCerts.length;
+
+        return (
+        <div className="space-y-5">
+          {/* Tiêu đề & Thao tác nhanh */}
+          <div className="border-b border-slate-200 pb-3 flex items-center justify-between flex-wrap gap-2">
             <div>
               <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-                <Users className="w-5 h-5 text-blue-600" />
+                <Users className="w-5 h-5 text-blue-600 shrink-0" />
                 Bước 2: Danh sách thuyền viên trực ca
               </h2>
-              <p className="text-xs text-slate-500">
-                Định biên an toàn tối thiểu {selectedVessel?.minCrew || 3} người • KHÔNG được để trống tên
+              <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                Định biên tối thiểu <strong className="text-slate-800">{selectedVessel?.minCrew || 3} người</strong>
+                <span className="mx-1.5" aria-hidden="true">·</span>
+                <span>Chứng chỉ đã lưu còn hiệu lực được tự động đọc lại</span>
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={handleCopyCrewFromPrevious}
-              className="px-3 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl flex items-center gap-1.5 transition cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Lấy đội ngũ của chuyến trước</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleCopyCrewFromPrevious}
+                className="px-3 py-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Lấy đội ngũ chuyến trước</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCrewMembers([
+                    ...crewMembers,
+                    {
+                      crewId: `TEMP-${Date.now()}`,
+                      fullName: '',
+                      positionTitle: 'Thủy thủ',
+                      certNumber: 'CC-VR-SB-TẠM',
+                      certExpireDate: '2028-01-01',
+                      nationality: 'Việt Nam',
+                      birthDate: '1995',
+                      birthPlace: 'Quảng Ngãi',
+                      passportNumber: '',
+                      isTemporary: true,
+                    },
+                  ]);
+                }}
+                className="px-3 py-1.5 text-xs font-bold bg-[#072b61] hover:bg-[#0c4a9c] text-white rounded-xl inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Thêm thuyền viên</span>
+              </button>
+            </div>
           </div>
 
-          {/* Chọn / Hiển thị Thuyền trưởng trực ca */}
-          <div className="p-4 sm:p-5 bg-blue-50/70 rounded-2xl border-2 border-blue-300 space-y-3 text-xs sm:text-sm">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className="block font-black text-slate-900 text-sm sm:text-base">
-                Thuyền trưởng chỉ huy trực ca (*):
-              </label>
+          {/* Thanh chọn / hiển thị Thuyền trưởng chỉ huy trực ca */}
+          <div className="p-3.5 bg-blue-50/70 rounded-2xl border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="shrink-0">
+              <p className="font-extrabold text-slate-900">
+                Thuyền trưởng chỉ huy trực ca (*)
+              </p>
               {currentUser.role === 'CAPTAIN' && (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-blue-600 text-white shadow-xs">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  Chính là tài khoản đang thực hiện khai báo
-                </span>
+                <p className="text-[11px] text-blue-700 font-semibold mt-0.5">
+                  Tài khoản đang thực hiện khai báo
+                </p>
               )}
             </div>
 
             {currentUser.role === 'CAPTAIN' ? (
-              <div className="p-4 bg-white rounded-xl border border-blue-200 shadow-2xs space-y-2.5">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-base shrink-0 shadow-xs">
-                      TT
-                    </div>
-                    <div>
-                      <p className="text-base sm:text-lg font-black text-slate-900">
-                        {currentUser.fullName}
-                      </p>
-                      <p className="text-xs text-slate-600 font-semibold">
-                        SĐT: {currentUser.phone || userCaptainCrew.phone} • CCCD: {userCaptainCrew.citizenId || '051082001122'}
-                      </p>
-                    </div>
-                  </div>
-                  <span className="px-3 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-300 text-xs font-black">
-                    {userCaptainCrew.certType || 'Thuyền trưởng hạng 2 VR-SB'}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-100 text-xs text-slate-700">
-                  <div>
-                    Số bằng GCNKNCM: <strong className="font-mono text-blue-950 font-black">{userCaptainCrew.certNumber}</strong>
-                  </div>
-                  <div>
-                    Hạn bằng thuyền trưởng: <strong className={userCaptainCrew.certExpireDate < todayIso ? 'text-red-600 font-bold' : 'text-slate-900 font-bold'}>{userCaptainCrew.certExpireDate}</strong>
-                  </div>
-                </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-700 tabular-nums">
+                <strong className="text-slate-950 text-sm">{currentUser.fullName}</strong>
+                <span className="text-slate-400" aria-hidden="true">·</span>
+                <span>{userCaptainCrew.certType || 'Thuyền trưởng hạng 2 VR-SB'}</span>
+                <span className="text-slate-400" aria-hidden="true">·</span>
+                <span>
+                  Bằng: <strong className="font-mono text-blue-950">{userCaptainCrew.certNumber}</strong>
+                </span>
+                <span className="text-slate-400" aria-hidden="true">·</span>
+                <span>
+                  Hạn:{' '}
+                  <strong className={userCaptainCrew.certExpireDate < todayIso ? 'text-red-600' : 'text-slate-900'}>
+                    {userCaptainCrew.certExpireDate}
+                  </strong>
+                </span>
+                <span className="text-slate-400" aria-hidden="true">·</span>
+                <span>SĐT: {currentUser.phone || userCaptainCrew.phone}</span>
               </div>
             ) : (
               <select
@@ -2276,243 +2797,320 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
                     );
                   }
                 }}
-                className="w-full p-3.5 text-base sm:text-sm font-bold border-2 border-blue-300 rounded-xl bg-white focus:border-blue-600"
+                className="w-full sm:max-w-xl px-3 py-2 text-xs font-bold border border-blue-300 rounded-xl bg-white focus:border-blue-600"
               >
                 {crewCatalog
                   .filter((c) => c.position === 'CAPTAIN')
-                  .map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.fullName} - Bằng: {c.certNumber} ({c.certType}) - Hạn: {c.certExpireDate}
-                    </option>
-                  ))}
+                  .map((c) => {
+                    const assignedVessel = vessels.find((v) => v.id === c.assignedVesselId);
+                    const vesselLabel = assignedVessel ? ` [${assignedVessel.name}]` : '';
+                    const phoneLabel = c.phone ? ` · SĐT: ${c.phone}` : '';
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.fullName}
+                        {vesselLabel}
+                        {phoneLabel} · Bằng: {c.certNumber} · Hạn: {c.certExpireDate}
+                      </option>
+                    );
+                  })}
               </select>
             )}
           </div>
 
-          {/* Bảng thuyền viên trực ca */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs sm:text-sm font-bold text-slate-800 uppercase">
-                Bảng danh sách thuyền viên theo định biên ({crewMembers.length} người):
+          {/* Thanh tóm tắt tình trạng chứng chỉ thuyền viên */}
+          <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums">
+            <div className="flex items-center gap-2 text-slate-700">
+              <FileCheck className="w-4 h-4 text-blue-600 shrink-0" />
+              <span>
+                Đội ngũ trực ca: <strong className="text-slate-900">{crewMembers.length} người</strong>
+                <span className="mx-1.5 text-slate-400" aria-hidden="true">·</span>
+                Chứng chỉ hợp lệ / tự đọc lại: <strong className="text-emerald-700">{readyCrewCertCount}/{crewMembers.length}</strong>
+                {missingCrewCertCount > 0 && (
+                  <>
+                    <span className="mx-1.5 text-slate-400" aria-hidden="true">·</span>
+                    <strong className="text-amber-700">Cần bổ sung: {missingCrewCertCount}</strong>
+                  </>
+                )}
               </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setCrewMembers([
-                    ...crewMembers,
-                    {
-                      crewId: `TEMP-${Date.now()}`,
-                      fullName: '',
-                      positionTitle: 'Thủy thủ',
-                      certNumber: 'CC-VR-SB-TẠM',
-                      certExpireDate: '2028-01-01',
-                      nationality: 'Việt Nam',
-                      birthDate: '1995',
-                      birthPlace: 'Quảng Ngãi',
-                      passportNumber: '',
-                      isTemporary: true,
-                    },
-                  ]);
-                }}
-                className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg flex items-center gap-1 cursor-pointer border border-slate-200"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Thêm thuyền viên</span>
-              </button>
             </div>
+            <span className="text-[11px] text-slate-500">
+              Hỗ trợ tải ảnh (JPG, PNG, WEBP) hoặc PDF giấy chứng nhận
+            </span>
+          </div>
 
-            <div className="space-y-3">
-              {crewMembers.map((cm, idx) => {
-                const certCheck = crewCertChecks[idx];
-                const isFirstCaptainLocked = idx === 0 && currentUser.role === 'CAPTAIN';
-                return (
-                <div
-                  key={idx}
-                  className={`p-3.5 sm:p-4 rounded-xl border transition ${
-                    !cm.fullName || cm.fullName.trim() === ''
-                      ? 'bg-red-50 border-red-300'
-                      : isFirstCaptainLocked
-                      ? 'bg-blue-50/40 border-blue-200'
-                      : 'bg-slate-50 border-slate-200'
-                  }`}
-                >
-                  {!isFirstCaptainLocked && (
-                    <div className="mb-3 pb-2.5 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-xs">
-                      <span className="font-bold text-slate-700">Đồng bộ từ Danh bạ thuyền viên hệ thống:</span>
-                      <select
-                        value={crewCatalog.some((c) => c.id === cm.crewId) ? cm.crewId : ''}
-                        onChange={(e) => {
-                          const picked = crewCatalog.find((c) => c.id === e.target.value);
-                          if (!picked) return;
-                          setCrewMembers((prev) =>
-                            prev.map((item, i) =>
-                              i === idx
-                                ? {
-                                    ...item,
-                                    crewId: picked.id,
-                                    fullName: picked.fullName,
-                                    positionTitle: picked.positionTitle,
-                                    certNumber: picked.certNumber,
-                                    certExpireDate: picked.certExpireDate,
-                                    passportNumber: picked.citizenId,
-                                    isTemporary: false,
-                                  }
-                                : item
-                            )
-                          );
-                        }}
-                        className="p-1.5 px-2.5 border border-slate-300 rounded-lg bg-white text-xs font-semibold max-w-full sm:max-w-xs"
+          {/* BẢNG DANH SÁCH THUYỀN VIÊN TRỰC CA */}
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[880px] text-left text-xs border-collapse">
+                <thead className="bg-[#edf4fe] text-[#07244d] text-[11px] font-extrabold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-2.5 w-11 text-center">STT</th>
+                    <th className="py-3 px-2.5 w-36">Chức danh (*)</th>
+                    <th className="py-3 px-2.5 min-w-[220px]">Họ và tên (*) / Chọn từ danh bạ</th>
+                    <th className="py-3 px-2.5 w-44">Số GCNKNCM &amp; Hạn bằng</th>
+                    <th className="py-3 px-2.5 min-w-[200px]">Giấy chứng nhận (Ảnh / PDF)</th>
+                    <th className="py-3 px-2.5 w-44 text-right">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {crewMembers.map((cm, idx) => {
+                    const certCheck = crewCertChecks[idx];
+                    const linkedCertDoc = resolveCrewCertDoc(cm, certCheck);
+                    const isUploadingThisCrew = uploadingCrewCertId === cm.crewId;
+                    const isFirstCaptainLocked = idx === 0 && currentUser.role === 'CAPTAIN';
+                    const isMissingName = !cm.fullName || cm.fullName.trim() === '';
+                    const isCertExpired = Boolean(cm.certExpireDate && cm.certExpireDate < todayIso);
+                    const needsUpload = !certCheck || certCheck.requiresStep5Upload;
+
+                    return (
+                      <tr
+                        key={idx}
+                        className={
+                          isMissingName || isCertExpired
+                            ? 'bg-red-50/55 hover:bg-red-50/80 transition-colors'
+                            : needsUpload
+                            ? 'bg-amber-50/40 hover:bg-amber-50/75 transition-colors'
+                            : isFirstCaptainLocked
+                            ? 'bg-blue-50/30 hover:bg-blue-50/50 transition-colors'
+                            : 'hover:bg-slate-50/70 transition-colors'
+                        }
                       >
-                        <option value="">-- Nhập thủ công / Chọn từ danh bạ ({crewCatalog.length} TV) --</option>
-                        {crewCatalog.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.fullName} ({c.positionTitle} • {c.certNumber} • Hạn: {c.certExpireDate})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                        <td className="py-3 px-2.5 text-center font-semibold text-slate-500 tabular-nums align-top">
+                          {idx + 1}
+                        </td>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs sm:text-sm">
-                    <div>
-                      <label className="block text-[11px] sm:text-xs font-bold text-slate-600 mb-1">
-                        Vị trí / Chức danh (*):
-                      </label>
-                      <input
-                        type="text"
-                        value={cm.positionTitle}
-                        readOnly={isFirstCaptainLocked}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setCrewMembers((prev) =>
-                            prev.map((item, i) => (i === idx ? { ...item, positionTitle: val } : item))
-                          );
-                        }}
-                        className={`w-full p-2.5 font-bold border rounded-lg ${
-                          isFirstCaptainLocked
-                            ? 'bg-slate-100 text-slate-800 border-slate-300 cursor-not-allowed'
-                            : 'border-slate-300 bg-white'
-                        }`}
-                      />
-                    </div>
+                        {/* Chức danh */}
+                        <td className="py-2.5 px-2.5 align-top">
+                          <input
+                            type="text"
+                            value={cm.positionTitle}
+                            readOnly={isFirstCaptainLocked}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCrewMembers((prev) =>
+                                prev.map((item, i) => (i === idx ? { ...item, positionTitle: val } : item))
+                              );
+                            }}
+                            className={`w-full px-2.5 py-1.5 text-xs font-bold border rounded-lg ${
+                              isFirstCaptainLocked
+                                ? 'bg-slate-100 text-slate-800 border-slate-200 cursor-not-allowed'
+                                : 'border-slate-300 bg-white'
+                            }`}
+                          />
+                          {cm.isTemporary && (
+                            <span className="block text-[10px] font-semibold text-amber-700 mt-1">
+                              Thuyền viên mới
+                            </span>
+                          )}
+                        </td>
 
-                    <div className="sm:col-span-2">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block text-[11px] sm:text-xs font-bold text-slate-600">
-                          Họ và tên thuyền viên (*) (Không được để trống):
-                        </label>
-                        {isFirstCaptainLocked && (
-                          <span className="text-[10px] sm:text-xs font-black text-blue-800 bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">
-                            Tài khoản đang khai báo
-                          </span>
-                        )}
-                      </div>
-                      <input
-                        type="text"
-                        value={cm.fullName}
-                        readOnly={isFirstCaptainLocked}
-                        placeholder="Nhập đầy đủ họ và tên..."
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setCrewMembers((prev) =>
-                            prev.map((item, i) => (i === idx ? { ...item, fullName: val } : item))
-                          );
-                        }}
-                        className={`w-full p-2.5 text-base sm:text-sm font-bold border rounded-lg ${
-                          isFirstCaptainLocked
-                            ? 'bg-blue-50/80 border-blue-300 text-blue-950 font-black cursor-not-allowed'
-                            : !cm.fullName
-                            ? 'border-red-500 focus:ring-red-500 bg-white'
-                            : 'border-slate-300 bg-white'
-                        }`}
-                      />
-                      {!cm.fullName && (
-                        <span className="text-[10px] sm:text-xs text-red-600 font-bold block mt-0.5">
-                          ✕ Lỗi chặn: Dòng này chưa có tên thuyền viên!
-                        </span>
-                      )}
-                    </div>
+                        {/* Họ tên & đồng bộ danh bạ */}
+                        <td className="py-2.5 px-2.5 align-top space-y-1.5">
+                          <input
+                            type="text"
+                            value={cm.fullName}
+                            readOnly={isFirstCaptainLocked}
+                            placeholder="Nhập đầy đủ họ và tên..."
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCrewMembers((prev) =>
+                                prev.map((item, i) => (i === idx ? { ...item, fullName: val } : item))
+                              );
+                            }}
+                            className={`w-full px-2.5 py-1.5 text-xs font-bold border rounded-lg ${
+                              isFirstCaptainLocked
+                                ? 'bg-blue-50/80 border-blue-200 text-blue-950 cursor-not-allowed'
+                                : isMissingName
+                                ? 'border-red-500 bg-white'
+                                : 'border-slate-300 bg-white'
+                            }`}
+                          />
+                          {isMissingName && (
+                            <p className="text-[11px] text-red-600 font-bold">
+                              Chưa nhập họ tên thuyền viên
+                            </p>
+                          )}
+                          {isFirstCaptainLocked ? (
+                            <p className="text-[11px] text-blue-700 font-semibold">
+                              Tài khoản đang khai báo
+                            </p>
+                          ) : (
+                            <select
+                              value={crewCatalog.some((c) => c.id === cm.crewId) ? cm.crewId : ''}
+                              onChange={(e) => {
+                                const picked = crewCatalog.find((c) => c.id === e.target.value);
+                                if (!picked) return;
+                                setCrewMembers((prev) =>
+                                  prev.map((item, i) =>
+                                    i === idx
+                                      ? {
+                                          ...item,
+                                          crewId: picked.id,
+                                          fullName: picked.fullName,
+                                          positionTitle: picked.positionTitle,
+                                          certNumber: picked.certNumber,
+                                          certExpireDate: picked.certExpireDate,
+                                          passportNumber: picked.citizenId,
+                                          isTemporary: false,
+                                        }
+                                      : item
+                                  )
+                                );
+                              }}
+                              className="w-full px-2 py-1 border border-slate-200 rounded-lg bg-slate-50 text-[11px] text-slate-700 font-medium"
+                              title="Chọn nhanh từ danh bạ thuyền viên hệ thống"
+                            >
+                              <option value="">-- Chọn từ danh bạ ({crewCatalog.length} TV) --</option>
+                              {crewCatalog.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.fullName} ({c.positionTitle} · {c.certNumber})
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </td>
 
-                    <div>
-                      <label className="block text-[11px] sm:text-xs font-semibold text-slate-600 mb-1">
-                        Số GCNKNCM:
-                      </label>
-                      <input
-                        type="text"
-                        value={cm.certNumber}
-                        readOnly={isFirstCaptainLocked}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setCrewMembers((prev) =>
-                            prev.map((item, i) => (i === idx ? { ...item, certNumber: val } : item))
-                          );
-                        }}
-                        className={`w-full p-2.5 border rounded-lg font-mono ${
-                          isFirstCaptainLocked
-                            ? 'bg-slate-100 border-slate-300 text-slate-800 cursor-not-allowed font-bold'
-                            : 'border-slate-300 bg-white'
-                        }`}
-                      />
-                    </div>
-                  </div>
+                        {/* Số GCN & Hạn bằng */}
+                        <td className="py-2.5 px-2.5 align-top space-y-1.5">
+                          <input
+                            type="text"
+                            value={cm.certNumber}
+                            readOnly={isFirstCaptainLocked}
+                            placeholder="Số GCNKNCM"
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCrewMembers((prev) =>
+                                prev.map((item, i) => (i === idx ? { ...item, certNumber: val } : item))
+                              );
+                            }}
+                            className={`w-full px-2.5 py-1.5 text-xs font-mono border rounded-lg ${
+                              isFirstCaptainLocked
+                                ? 'bg-slate-100 border-slate-200 text-slate-800 cursor-not-allowed font-bold'
+                                : 'border-slate-300 bg-white'
+                            }`}
+                          />
+                          <input
+                            type="date"
+                            value={cm.certExpireDate}
+                            readOnly={isFirstCaptainLocked && !certCheck?.isExpired}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCrewMembers((prev) =>
+                                prev.map((item, i) => (i === idx ? { ...item, certExpireDate: val } : item))
+                              );
+                            }}
+                            className={`w-full px-2 py-1 text-[11px] font-bold border rounded-lg tabular-nums ${
+                              isCertExpired
+                                ? 'border-red-300 text-red-700 bg-red-50'
+                                : 'border-slate-200 text-slate-700 bg-white'
+                            }`}
+                          />
+                        </td>
 
-                  <div className="flex flex-wrap items-center justify-between gap-2 mt-2.5 pt-2.5 border-t border-slate-200 text-[11px]">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <label className="flex items-center gap-1.5">
-                        <span>Hạn chứng chỉ:</span>
-                        <input
-                          type="date"
-                          value={cm.certExpireDate}
-                          readOnly={isFirstCaptainLocked && !certCheck?.isExpired}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setCrewMembers((prev) =>
-                              prev.map((item, i) => (i === idx ? { ...item, certExpireDate: val } : item))
-                            );
-                          }}
-                          className={`px-2 py-0.5 border rounded font-bold ${
-                            cm.certExpireDate < todayIso
-                              ? 'border-red-300 text-red-700 bg-red-50'
-                              : 'border-slate-300 text-slate-800 bg-white'
-                          }`}
-                        />
-                      </label>
+                        {/* Trạng thái & tệp Giấy chứng nhận */}
+                        <td className="py-2.5 px-2.5 align-top space-y-1">
+                          {!needsUpload ? (
+                            <span className="inline-flex items-center gap-1.5 font-bold text-emerald-700">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>
+                                {certCheck?.canReuse ? 'Đã có (Tự đọc lại)' : 'Đã tải tệp hợp lệ'}
+                              </span>
+                            </span>
+                          ) : certCheck?.isExpired || isCertExpired ? (
+                            <span className="inline-flex items-center gap-1.5 font-extrabold text-red-700">
+                              <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                              <span>Hết hạn — Cần tải mới</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 font-extrabold text-amber-700">
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                              <span>Chưa có — Cần bổ sung</span>
+                            </span>
+                          )}
 
-                      {certCheck && !certCheck.requiresStep5Upload ? (
-                        <span className="text-emerald-800 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-full font-bold">
-                          ✓ {certCheck.canReuse ? 'Đã nộp & còn hạn (Tự động dùng lại)' : 'Đã cung cấp tại Bước 5'}
-                        </span>
-                      ) : (
-                        <span className="text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full font-bold">
-                          ⚠ {certCheck?.isExpired ? 'Hết hạn — Yêu cầu cung cấp mới ở Bước 5' : 'Chưa nộp trước đó — Yêu cầu cung cấp ở Bước 5'}
-                        </span>
-                      )}
+                          {linkedCertDoc ? (
+                            <p
+                              className="text-[11px] text-slate-600 truncate max-w-[220px]"
+                              title={linkedCertDoc.fileName}
+                            >
+                              <span className="font-mono font-bold text-slate-700 mr-1">
+                                [{linkedCertDoc.fileType === 'PDF' ? 'PDF' : 'ẢNH'}]
+                              </span>
+                              {linkedCertDoc.fileName}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-slate-500">
+                              Chưa có tệp ảnh/PDF đính kèm
+                            </p>
+                          )}
+                        </td>
 
-                      {cm.isTemporary && (
-                        <span className="text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded font-semibold">
-                          Thuyền viên mới
-                        </span>
-                      )}
-                    </div>
+                        {/* Thao tác */}
+                        <td className="py-2.5 px-2.5 text-right align-top whitespace-nowrap">
+                          <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
+                            {linkedCertDoc && (
+                              <button
+                                type="button"
+                                onClick={() => setPreviewDocModal(linkedCertDoc)}
+                                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 inline-flex items-center gap-1 cursor-pointer transition"
+                                title="Xem ảnh hoặc file PDF giấy chứng nhận"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Xem</span>
+                              </button>
+                            )}
 
-                    {idx >= 3 && (
-                      <button
-                        type="button"
-                        onClick={() => setCrewMembers(crewMembers.filter((_, i) => i !== idx))}
-                        className="text-red-600 hover:text-red-800 flex items-center gap-1 font-semibold cursor-pointer"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        <span>Xóa</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-                );
-              })}
+                            <button
+                              type="button"
+                              disabled={isUploadingThisCrew}
+                              onClick={() => triggerCrewCertUpload(cm.crewId)}
+                              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer transition disabled:opacity-60 ${
+                                needsUpload
+                                  ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+                              }`}
+                              title={
+                                needsUpload
+                                  ? 'Tải lên ảnh chụp hoặc tệp PDF giấy chứng nhận'
+                                  : 'Thay thế bằng tệp giấy chứng nhận mới hơn'
+                              }
+                            >
+                              {isUploadingThisCrew ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Upload className="w-3.5 h-3.5" />
+                              )}
+                              <span>
+                                {isUploadingThisCrew
+                                  ? 'Đang tải...'
+                                  : needsUpload
+                                  ? 'Bổ sung'
+                                  : 'Thay tệp'}
+                              </span>
+                            </button>
+
+                            {idx >= 3 && (
+                              <button
+                                type="button"
+                                onClick={() => setCrewMembers(crewMembers.filter((_, i) => i !== idx))}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer transition"
+                                title="Xóa thuyền viên này"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* BƯỚC 3: HÀNH KHÁCH (DANH SÁCH HÀNH KHÁCH) */}
       {currentStep === 3 && (
@@ -2539,8 +3137,8 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowAddPaxForm(!showAddPaxForm)}
-                className="px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl flex items-center gap-1.5 shadow-xs cursor-pointer"
+                onClick={openAddPassengerModal}
+                className="px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl flex items-center gap-1.5 shadow-xs cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Plus className="w-4 h-4" />
                 <span>Thêm hành khách</span>
@@ -2578,112 +3176,6 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
               </span>
             </div>
           </div>
-
-          {/* Form thêm khách lẻ */}
-          {showAddPaxForm && (
-            <div className="p-4 bg-slate-50 rounded-2xl border-2 border-blue-400 space-y-3 animate-in fade-in">
-              <h4 className="text-xs font-bold text-blue-900 uppercase">
-                Nhập thông tin hành khách mới:
-              </h4>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                <div className="sm:col-span-2">
-                  <label className="block font-semibold text-slate-700 mb-1">Họ và tên (*):</label>
-                  <input
-                    type="text"
-                    value={newPaxName}
-                    onChange={(e) => setNewPaxName(e.target.value)}
-                    placeholder="VD: Nguyễn Văn An"
-                    className="w-full p-2.5 text-base sm:text-sm font-bold border border-slate-300 rounded-xl bg-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Năm sinh (*):</label>
-                  <input
-                    type="number"
-                    value={newPaxBirthYear}
-                    onChange={(e) => setNewPaxBirthYear(parseInt(e.target.value) || 1990)}
-                    className="w-full p-2.5 text-base sm:text-sm font-semibold border border-slate-300 rounded-xl bg-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Giới tính:</label>
-                  <select
-                    value={newPaxGender}
-                    onChange={(e) => setNewPaxGender(e.target.value as any)}
-                    className="w-full p-2.5 border border-slate-300 rounded-xl bg-white font-semibold"
-                  >
-                    <option value="NAM">Nam</option>
-                    <option value="NU">Nữ</option>
-                    <option value="KHAC">Khác</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Số điện thoại (*):</label>
-                  <input
-                    type="text"
-                    value={newPaxPhone}
-                    onChange={(e) => setNewPaxPhone(e.target.value)}
-                    placeholder="0988123456"
-                    className="w-full p-2.5 text-base sm:text-sm border border-slate-300 rounded-xl bg-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Số CCCD / Hộ chiếu (*):</label>
-                  <input
-                    type="text"
-                    value={newPaxIdNumber}
-                    onChange={(e) => setNewPaxIdNumber(e.target.value)}
-                    placeholder="0510..."
-                    className="w-full p-2.5 text-base sm:text-sm border border-slate-300 rounded-xl bg-white font-mono"
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block font-semibold text-slate-700 mb-1">Địa chỉ thường trú / Lưu trú:</label>
-                  <input
-                    type="text"
-                    value={newPaxAddress}
-                    onChange={(e) => setNewPaxAddress(e.target.value)}
-                    className="w-full p-2.5 border border-slate-300 rounded-xl bg-white text-xs"
-                  />
-                </div>
-
-                <div className="flex items-center pt-5">
-                  <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-purple-900">
-                    <input
-                      type="checkbox"
-                      checked={newPaxIsForeigner}
-                      onChange={(e) => setNewPaxIsForeigner(e.target.checked)}
-                      className="rounded text-purple-600 w-4 h-4"
-                    />
-                    Khách nước ngoài
-                  </label>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddPaxForm(false)}
-                  className="px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-lg cursor-pointer"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddPassenger}
-                  className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer"
-                >
-                  Lưu hành khách
-                </button>
-              </div>
-            </div>
-          )}
 
           {/* Công cụ Excel */}
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between flex-wrap gap-2 text-xs">
@@ -2743,39 +3235,50 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
                 {passengers.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="p-6 text-center text-slate-400 italic">
-                      Chưa có hành khách nào. Bấm "Thêm hành khách" hoặc "Nhập từ file Excel" để thêm.
+                      Chưa có hành khách nào trong danh sách. Bạn có thể bấm &quot;Thêm hành khách&quot; hoặc nhập nhanh từ tệp Excel.
                     </td>
                   </tr>
                 ) : (
                   passengers.map((p, idx) => (
-                    <tr key={p.id} className="hover:bg-slate-50">
-                      <td className="p-2 text-center font-bold text-slate-500">{idx + 1}</td>
-                      <td className="p-2 font-bold text-slate-900">
-                        {p.fullName}
-                        {p.isForeigner && (
-                          <span className="ml-1 text-[9px] bg-purple-100 text-purple-800 font-semibold px-1 rounded">
-                            Ngoại quốc
-                          </span>
+                    <tr
+                      key={p.id}
+                      className={`${idx % 2 === 0 ? 'bg-white' : 'bg-[#f1f6fd]/70'} hover:bg-blue-50/70 transition-colors`}
+                    >
+                      <td className="p-2.5 text-center font-bold text-slate-500 tabular-nums">{idx + 1}</td>
+                      <td className="p-2.5 font-bold text-slate-900">
+                        <div>
+                          {p.fullName}
+                          {p.isForeigner && (
+                            <span className="ml-1.5 text-[10px] font-semibold text-purple-700">
+                              · Ngoại quốc
+                            </span>
+                          )}
+                        </div>
+                        {p.notes && (
+                          <p className="text-[11px] font-normal text-slate-500 truncate max-w-[200px]">
+                            {p.notes}
+                          </p>
                         )}
                       </td>
-                      <td className="p-2 text-center text-slate-700">
+                      <td className="p-2.5 text-center text-slate-700 tabular-nums">
                         {p.birthYear} ({2026 - p.birthYear}t)
                       </td>
-                      <td className="p-2 text-center text-slate-600">
+                      <td className="p-2.5 text-center text-slate-600">
                         {p.gender === 'NAM' ? 'Nam' : p.gender === 'NU' ? 'Nữ' : 'Khác'}
                       </td>
-                      <td className="p-2 font-mono text-slate-700">
+                      <td className="p-2.5 font-mono tabular-nums text-slate-700">
                         {showFullIdInList ? p.phone : maskPhone(p.phone)}
                       </td>
-                      <td className="p-2 font-mono font-semibold text-slate-800">
+                      <td className="p-2.5 font-mono tabular-nums font-semibold text-slate-800">
                         {showFullIdInList ? p.idNumber : maskIdNumber(p.idNumber)}
                       </td>
-                      <td className="p-2 text-slate-600 truncate max-w-[130px]">{p.address}</td>
-                      <td className="p-2 text-center">
+                      <td className="p-2.5 text-slate-600 truncate max-w-[150px]">{p.address}</td>
+                      <td className="p-2.5 text-center">
                         <button
                           type="button"
                           onClick={() => handleRemovePassenger(p.id)}
-                          className="p-1 text-slate-400 hover:text-red-600 rounded transition cursor-pointer"
+                          aria-label={`Xóa hành khách ${p.fullName}`}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -2910,10 +3413,40 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
       )}
 
       {/* ======================================================== */}
-      {/* BƯỚC 5: TẢI LÊN CÁC GIẤY TỜ ĐÍNH KÈM (CÓ TÁI SỬ DỤNG GIẤY TỜ DÀI HẠN) */}
+      {/* BƯỚC 5: HỒ SƠ VÀ GIẤY TỜ CHỨNG THỰC ĐÍNH KÈM (DẠNG DANH SÁCH) */}
       {/* ======================================================== */}
-      {currentStep === 5 && (
-        <div className="space-y-6">
+      {currentStep === 5 && (() => {
+        const regDoc = uploadedDocuments.find((d) => d.category === 'REGISTRATION_CERT');
+        const safetyDoc = uploadedDocuments.find((d) => d.category === 'TECH_SAFETY_CERT');
+        const insuranceDoc = uploadedDocuments.find((d) => d.category === 'CIVIL_INSURANCE');
+        const feeDocs = uploadedDocuments.filter((d) => d.category === 'FEE_RECEIPT');
+        const otherDocs = uploadedDocuments.filter((d) => d.category === 'OTHER');
+
+        const isSafetyExpired = Boolean(
+          selectedVessel?.registryExpireDate && selectedVessel.registryExpireDate < todayIso
+        );
+        const isInsuranceExpired = Boolean(
+          selectedVessel?.civilInsuranceExpireDate && selectedVessel.civilInsuranceExpireDate < todayIso
+        );
+        const hasValidFee = feeDocs.length > 0 || feeTransactionCode.trim().length > 0;
+
+        // Tổng số mục bắt buộc & số mục thiếu/hết hạn cần cảnh báo
+        const vesselRequiredMissing =
+          (!regDoc ? 1 : 0) +
+          (!safetyDoc || isSafetyExpired ? 1 : 0) +
+          (!insuranceDoc && isInsuranceExpired ? 1 : 0);
+        const feeMissing = hasValidFee ? 0 : 1;
+        const totalRequiredItems = 3 + crewCertChecks.length + 1;
+        const totalMissingCount =
+          vesselRequiredMissing +
+          (!insuranceDoc && !isInsuranceExpired ? 1 : 0) +
+          missingOrExpiredCrewCerts.length +
+          feeMissing;
+        const totalReadyCount = Math.max(0, totalRequiredItems - totalMissingCount);
+
+        return (
+        <div className="space-y-5">
+          {/* Tiêu đề & nút đồng bộ */}
           <div className="border-b pb-3 flex items-center justify-between flex-wrap gap-2">
             <div>
               <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
@@ -2921,11 +3454,11 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
                 Bước 5: Hồ sơ và Giấy tờ chứng thực đính kèm
               </h2>
               <p className="text-xs text-slate-500">
-                Tự động dùng lại Giấy đăng ký tàu, Giấy CN an toàn KT/BVMT, Chứng chỉ thuyền viên • Tải lên Biên lai nộp phí chuyến này
+                Phương tiện: <strong className="text-slate-800">{selectedVessel?.name} ({selectedVessel?.regNumber})</strong> • Thuyền trưởng:{' '}
+                <strong className="text-slate-800">{crewCatalog.find((c) => c.id === selectedCaptainId)?.fullName || selectedVessel?.captainName || '—'}</strong>
               </p>
             </div>
 
-            {/* Nút tự động áp dụng các giấy tờ dùng lại của tàu */}
             <button
               type="button"
               onClick={handleReloadDefaultShipDocs}
@@ -2937,602 +3470,817 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
             </button>
           </div>
 
-          {/* HỘP HƯỚNG DẪN TIỆN ÍCH DÀNH CHO THUYỀN TRƯỞNG & CHỦ TÀU */}
-          <div className="p-4 bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 rounded-2xl border border-blue-200 text-xs space-y-2">
-            <div className="flex items-center gap-2 text-blue-900 font-extrabold">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Tiện ích cho Thuyền trưởng: Tự động dùng lại các giấy tờ dài hạn</span>
-            </div>
-            <p className="text-slate-700 leading-relaxed">
-              Theo quy định, một số giấy tờ có hiệu lực dài hạn như: <strong className="text-blue-800">Giấy đăng ký phương tiện</strong>, <strong className="text-blue-800">Giấy CN an toàn KT/BVMT</strong> và <strong className="text-blue-800">Chứng chỉ chuyên môn thuyền viên</strong> được hệ thống tự động lưu trữ và <strong className="text-emerald-700 uppercase">sử dụng lại giữa các chuyến</strong>. Thuyền trưởng không cần phải chụp hoặc tải lại các giấy tờ này mỗi khi khai chuyến mới.
-            </p>
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600 pt-1">
-              <span className="font-semibold">Phương tiện áp dụng:</span>
-              <span className="px-2 py-0.5 rounded bg-white font-bold text-blue-700 border border-blue-200">
-                {selectedVessel?.name} ({selectedVessel?.regNumber})
-              </span>
-              <span className="font-semibold ml-2">Thuyền trưởng:</span>
-              <span className="px-2 py-0.5 rounded bg-white font-bold text-blue-700 border border-blue-200">
-                {crewCatalog.find((c) => c.id === selectedCaptainId)?.fullName || 'Nguyễn Văn Hùng'}
-              </span>
-            </div>
-          </div>
-
-          {/* DẢI TIẾN ĐỘ 4 LOẠI GIẤY TỜ CẦN CÓ */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-            {[
-              { cat: 'REGISTRATION_CERT', label: '1. GCN Đăng ký tàu', sub: 'Tái sử dụng' },
-              { cat: 'TECH_SAFETY_CERT', label: '2. GCN An toàn KT/BVMT', sub: 'Tái sử dụng' },
-              {
-                cat: 'CREW_CERTIFICATE',
-                label: '3. Bằng/CC chuyên môn',
-                sub:
-                  missingOrExpiredCrewCerts.length === 0
-                    ? `Đủ (${crewCertChecks.length}/${crewCertChecks.length} TV)`
-                    : `Thiếu/Hết hạn ${missingOrExpiredCrewCerts.length} TV`,
-              },
-              { cat: 'FEE_RECEIPT', label: '4. Phí / Lệ phí cảng vụ', sub: 'Nộp chuyến này' },
-            ].map((item) => {
-              const isAttached =
-                item.cat === 'CREW_CERTIFICATE'
-                  ? missingOrExpiredCrewCerts.length === 0 && crewCertChecks.length > 0
-                  : uploadedDocuments.some((d) => d.category === item.cat);
-              return (
-                <div
-                  key={item.cat}
-                  className={`p-2.5 rounded-xl border flex items-center gap-2 ${
-                    isAttached
-                      ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold'
-                      : 'bg-amber-50 border-amber-300 text-amber-950 font-bold'
-                  }`}
-                >
-                  <div
-                    className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 text-xs font-black ${
-                      isAttached ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white'
-                    }`}
-                  >
-                    {isAttached ? '✓' : '!'}
-                  </div>
-                  <div className="truncate min-w-0">
-                    <p className="text-[11px] font-bold truncate">{item.label}</p>
-                    <span className={`text-[10px] font-medium ${isAttached ? 'text-emerald-700' : 'text-amber-800'}`}>
-                      {item.cat === 'CREW_CERTIFICATE'
-                        ? item.sub
-                        : isAttached
-                        ? `Đã có (${item.sub})`
-                        : 'Chưa có'}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* ======================================================= */}
-          {/* KIỂM TRA CHỨNG CHỈ TỪNG THUYỀN VIÊN (DÙNG LẠI / YÊU CẦU NỘP MỚI) */}
-          {/* ======================================================= */}
-          <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Thanh tổng hợp tình trạng hồ sơ giấy tờ */}
+          <div
+            className={`p-3.5 rounded-2xl border flex flex-wrap items-center justify-between gap-3 text-xs ${
+              totalMissingCount > 0
+                ? 'bg-amber-50/90 border-amber-300 text-amber-950'
+                : 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              {totalMissingCount > 0 ? (
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              )}
               <div>
-                <h3 className="text-xs font-extrabold text-slate-900 uppercase flex items-center gap-1.5">
-                  <UserCheck className="w-4 h-4 text-blue-600" />
-                  Kiểm tra hiệu lực &amp; Đồng bộ chứng chỉ theo từng thuyền viên ({crewCertChecks.length} người)
-                </h3>
-                <p className="text-[11px] text-slate-600">
-                  Hệ thống kiểm tra chứng chỉ đã nộp trước đó: nếu còn hạn sẽ tự động dùng lại; nếu hết hạn hoặc chưa từng nộp, yêu cầu Thuyền trưởng cung cấp ở bước này.
+                <p className="font-extrabold">
+                  {totalMissingCount > 0
+                    ? `Cảnh báo: Còn ${totalMissingCount} mục giấy tờ chưa đủ hoặc đã hết hạn cần bổ sung`
+                    : 'Đầy đủ hồ sơ và giấy tờ chứng thực hợp lệ'}
+                </p>
+                <p className="text-[11px] opacity-85">
+                  Các giấy tờ dài hạn đã lưu trên hệ thống được tự động đọc lại. Bấm nút <strong>Bổ sung</strong> tại từng dòng bị cảnh báo để tải ảnh hoặc file PDF tương ứng.
                 </p>
               </div>
-              {missingOrExpiredCrewCerts.length > 0 ? (
-                <span className="px-3 py-1 rounded-full bg-red-100 text-red-800 border border-red-300 text-[11px] font-extrabold">
-                  Cần cung cấp {missingOrExpiredCrewCerts.length} chứng chỉ tại Bước 5
-                </span>
-              ) : (
-                <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-extrabold">
-                  ✓ Toàn bộ chứng chỉ thuyền viên hợp lệ
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 font-bold text-[11px]">
+              <span className="px-2.5 py-1 rounded-full bg-white border border-emerald-200 text-emerald-800">
+                Đủ hợp lệ: {totalReadyCount}/{totalRequiredItems}
+              </span>
+              {totalMissingCount > 0 && (
+                <span className="px-2.5 py-1 rounded-full bg-red-600 text-white">
+                  Cần bổ sung: {totalMissingCount}
                 </span>
               )}
             </div>
+          </div>
 
-            <input
-              ref={step5CrewUploadInputRef}
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png,.webp,image/*,application/pdf"
-              onChange={handleStep5CrewFileSelected}
-              className="hidden"
-            />
+          {/* Input ẩn cho thao tác chọn tệp và chụp ảnh từ camera */}
+          <input
+            type="file"
+            ref={docFileInputRef}
+            onChange={handleAddUploadedFile}
+            accept=".pdf,.jpg,.jpeg,.png,.webp,image/*,application/pdf"
+            className="hidden"
+          />
+          <input
+            type="file"
+            ref={cameraInputRef}
+            onChange={handleAddUploadedFile}
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+          />
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-              {crewCertChecks.map((check, idx) => {
-                const crewIdx = crewMembers.findIndex((c) => c.crewId === check.crewId && c.certNumber === check.certNumber);
-                const targetIdx = crewIdx >= 0 ? crewIdx : idx;
-                const linkedDoc =
-                  check.currentStep5Doc ||
-                  uploadedDocuments.find(
-                    (d) =>
-                      d.category === 'CREW_CERTIFICATE' &&
-                      (d.crewId === check.crewId || d.crewId === check.matchedCatalogCrew?.id)
-                  );
+          {/* ======================================================= */}
+          {/* DANH SÁCH THỐNG NHẤT HỒ SƠ & GIẤY TỜ CHỨNG THỰC ĐÍNH KÈM */}
+          {/* ======================================================= */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[780px] text-left text-xs border-collapse">
+                <thead className="bg-[#edf4fe] text-[#07244d] uppercase text-[10px] font-extrabold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-3 w-10 text-center">STT</th>
+                    <th className="py-3 px-3">Hồ sơ / Giấy tờ chứng thực</th>
+                    <th className="py-3 px-3 w-44">Tình trạng</th>
+                    <th className="py-3 px-3">Tệp đính kèm / Hiệu lực</th>
+                    <th className="py-3 px-3 text-right w-52">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {/* NHÓM I: GIẤY TỜ PHƯƠNG TIỆN VR-SB */}
+                  <tr className="bg-slate-50/90">
+                    <td colSpan={5} className="py-2 px-3 text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">
+                      I. Giấy tờ phương tiện VR-SB ({selectedVessel?.name} — {selectedVessel?.regNumber})
+                    </td>
+                  </tr>
 
-                return (
-                  <div
-                    key={`${check.crewId}-${idx}`}
-                    className={`p-3 rounded-xl border space-y-2 ${
-                      check.requiresStep5Upload
-                        ? 'bg-red-50/70 border-red-300'
-                        : 'bg-white border-emerald-200'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="font-bold text-slate-900">
-                          {check.fullName || '(Chưa nhập họ tên)'} •{' '}
-                          <span className="text-blue-700">{check.positionTitle}</span>
-                        </p>
-                        <p className="text-[11px] text-slate-600 font-mono">
-                          Số bằng: {check.certNumber || '---'} • Hạn: {check.effectiveExpireDate || 'Chưa có'}
-                        </p>
-                      </div>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold shrink-0 border ${
-                          check.status === 'REUSE_VALID'
-                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                            : check.status === 'UPLOADED_IN_STEP5'
-                            ? 'bg-blue-100 text-blue-800 border-blue-300'
-                            : 'bg-red-100 text-red-800 border-red-300'
-                        }`}
-                      >
-                        {check.status === 'REUSE_VALID'
-                          ? 'Dùng lại (Còn hạn)'
-                          : check.status === 'UPLOADED_IN_STEP5'
-                          ? 'Đã nộp Bước 5'
-                          : check.status === 'EXPIRED_REQUIRE_UPLOAD'
-                          ? 'Hết hạn - Cần nộp mới'
-                          : 'Chưa nộp - Cần cung cấp'}
+                  {/* 1. GCN Đăng ký phương tiện */}
+                  <tr className={!regDoc ? 'bg-amber-50/70' : 'hover:bg-slate-50/60'}>
+                    <td className="py-3 px-3 text-center font-bold text-slate-500">1</td>
+                    <td className="py-3 px-3">
+                      <p className="font-bold text-slate-900">Giấy chứng nhận đăng ký phương tiện thủy nội địa</p>
+                      <span className="inline-block mt-0.5 text-[10px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                        Bắt buộc • Tự động dùng lại
                       </span>
-                    </div>
-
-                    <p className={`text-[11px] leading-relaxed ${check.requiresStep5Upload ? 'text-red-900 font-semibold' : 'text-slate-600'}`}>
-                      {check.reasonText}
-                    </p>
-
-                    {check.requiresStep5Upload ? (
-                      <div className="pt-2 border-t border-red-200 space-y-2">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-700 mb-0.5">
-                              Số bằng / Chứng chỉ:
-                            </label>
-                            <input
-                              type="text"
-                              value={crewMembers[targetIdx]?.certNumber || ''}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setCrewMembers((prev) =>
-                                  prev.map((item, i) => (i === targetIdx ? { ...item, certNumber: val } : item))
-                                );
-                              }}
-                              className="w-full p-1.5 text-xs font-mono border border-slate-300 rounded-lg bg-white"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-700 mb-0.5">
-                              Ngày hết hạn mới (*):
-                            </label>
-                            <input
-                              type="date"
-                              value={crewMembers[targetIdx]?.certExpireDate || ''}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setCrewMembers((prev) =>
-                                  prev.map((item, i) => (i === targetIdx ? { ...item, certExpireDate: val } : item))
-                                );
-                              }}
-                              className={`w-full p-1.5 text-xs font-bold border rounded-lg bg-white ${
-                                (crewMembers[targetIdx]?.certExpireDate || '') < todayIso
-                                  ? 'border-red-400 text-red-700'
-                                  : 'border-emerald-400 text-emerald-800'
-                              }`}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              step5UploadTargetCrewIdRef.current = check.crewId;
-                              step5CrewUploadInputRef.current?.click();
-                            }}
-                            className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[11px] font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-                          >
-                            <Upload className="w-3.5 h-3.5" />
-                            <span>
-                              {check.currentStep5Doc
-                                ? 'Cập nhật lại PDF / Ảnh chứng chỉ'
-                                : 'Tải lên PDF / Ảnh chứng chỉ (Bước 5)'}
+                    </td>
+                    <td className="py-3 px-3">
+                      {regDoc ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Đã có (Hợp lệ)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-red-100 text-red-800 border border-red-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          Thiếu — Cần bổ sung
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3">
+                      {regDoc ? (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200">
+                              {regDoc.fileType}
                             </span>
-                          </button>
-                          {check.currentStep5Doc && (
-                            <span className="text-[10px] text-amber-800 font-semibold">
-                              Đã chọn tệp ({check.currentStep5Doc.fileName}) — cần ngày hết hạn ≥ {todayIso}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      linkedDoc && (
-                        <div className="pt-1.5 border-t border-emerald-100 flex items-center justify-between gap-2">
-                          <span className="text-[10px] text-slate-500 truncate">
-                            Tệp: <strong>{linkedDoc.fileName}</strong>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setPreviewDocModal(linkedDoc)}
-                            className="text-[11px] font-bold text-blue-600 hover:underline inline-flex items-center gap-1 shrink-0 cursor-pointer"
-                          >
-                            <Eye className="w-3 h-3" />
-                            <span>Xem PDF / Ảnh</span>
-                          </button>
-                        </div>
-                      )
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ======================================================= */}
-          {/* MỤC A: CÁC GIẤY TỜ TỰ ĐỘNG DÙNG LẠI (DÀI HẠN) */}
-          {/* ======================================================= */}
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                <h3 className="text-xs font-extrabold text-slate-900 uppercase">
-                  A. Giấy tờ tự động dùng lại từ hồ sơ tàu & thuyền viên ({
-                    uploadedDocuments.filter((d) => ['REGISTRATION_CERT', 'TECH_SAFETY_CERT', 'CREW_CERTIFICATE'].includes(d.category)).length
-                  } tệp):
-                </h3>
-              </div>
-              <span className="text-[11px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                ✓ Đã xác thực & Dùng lại
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              {uploadedDocuments
-                .filter((d) => ['REGISTRATION_CERT', 'TECH_SAFETY_CERT', 'CREW_CERTIFICATE'].includes(d.category))
-                .map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="p-3 bg-emerald-50/30 rounded-xl border border-emerald-200 shadow-2xs hover:border-emerald-300 transition space-y-2"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-2.5 min-w-0">
-                        <div
-                          className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-black text-xs ${
-                            doc.fileType === 'PDF'
-                              ? 'bg-red-100 text-red-700 border border-red-200'
-                              : 'bg-blue-100 text-blue-700 border border-blue-200'
-                          }`}
-                        >
-                          {doc.fileType}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="font-bold text-slate-900 truncate" title={doc.fileName}>
-                            {doc.fileName}
-                          </p>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="inline-block text-[10px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded">
-                              {doc.categoryName}
-                            </span>
-                            <span className="inline-flex items-center gap-0.5 text-[9px] font-extrabold text-emerald-800 bg-emerald-100 px-1.5 py-0.2 rounded">
-                              Tái sử dụng
+                            <span className="font-semibold text-slate-900 truncate max-w-[240px]" title={regDoc.fileName}>
+                              {regDoc.fileName}
                             </span>
                           </div>
+                          <p className="text-[11px] text-slate-500">{regDoc.validUntil || 'Hiệu lực lâu dài'}</p>
                         </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveUploadedDoc(doc.id)}
-                        className="text-slate-400 hover:text-red-600 p-1 rounded transition cursor-pointer"
-                        title="Xóa tệp này nếu muốn tải bản mới"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    {doc.note && (
-                      <p className="text-[11px] text-slate-600 bg-white p-1.5 rounded border border-slate-100">
-                        {doc.note}
-                      </p>
-                    )}
-
-                    <div className="flex items-center justify-between pt-1 border-t border-emerald-100 text-[10px] text-slate-500">
-                      <span>{doc.validUntil ? `Hiệu lực: ${doc.validUntil}` : 'Dài hạn'}</span>
-                      <button
-                        type="button"
-                        onClick={() => setPreviewDocModal(doc)}
-                        className="text-blue-600 hover:underline font-bold flex items-center gap-0.5 cursor-pointer"
-                      >
-                        <Eye className="w-3 h-3" />
-                        <span>Xem trước bản scan</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-
-          {/* ======================================================= */}
-          {/* MỤC B: NỘP PHÍ CẢNG BẾN (QR CHUYỂN KHOẢN / BIÊN LAI - R11) */}
-          {/* ======================================================= */}
-          <div className="space-y-4 pt-3 border-t border-slate-200">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-                <h3 className="text-xs font-extrabold text-slate-900 uppercase">
-                  B. Chứng từ nộp phí, lệ phí cảng bến (Quy tắc R11):
-                </h3>
-              </div>
-              <span className="text-[11px] text-blue-700 font-semibold">
-                Tải biên lai hoặc nhập mã giao dịch chuyển khoản
-              </span>
-            </div>
-
-            {/* Khung QR chuyển khoản & nhập mã giao dịch R11 */}
-            <div className="p-4 rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50/70 grid grid-cols-1 md:grid-cols-3 gap-4 items-center text-xs">
-              <div className="flex items-center gap-3 md:col-span-2">
-                {adminConfig.paymentQrImageUrl ? (
-                  <img
-                    src={adminConfig.paymentQrImageUrl}
-                    alt="QR nộp phí cảng bến"
-                    className="w-24 h-24 rounded-xl border border-blue-300 bg-white object-contain shrink-0 p-1"
-                  />
-                ) : (
-                  <div className="w-20 h-20 rounded-xl border border-dashed border-blue-300 bg-white flex flex-col items-center justify-center text-blue-700 shrink-0 text-[10px] font-bold text-center p-1">
-                    <Receipt className="w-6 h-6 mb-1" />
-                    QR Lệ phí
-                  </div>
-                )}
-                <div className="space-y-1 min-w-0">
-                  <p className="font-black text-blue-950 uppercase text-[11px]">
-                    Thông tin chuyển khoản lệ phí Ban Quản lý Cảng
-                  </p>
-                  <p className="text-slate-700">
-                    Ngân hàng: <strong>{adminConfig.paymentQrBankName || 'Vietcombank Quảng Ngãi'}</strong> • STK:{' '}
-                    <strong className="font-mono text-blue-900">{adminConfig.paymentQrAccountNumber || '0271000889999'}</strong>
-                  </p>
-                  <p className="text-slate-700">
-                    Đơn vị thụ hưởng: <strong>{adminConfig.paymentQrAccountHolder || 'Ban Quản lý Cảng tỉnh Quảng Ngãi'}</strong>
-                  </p>
-                  {adminConfig.paymentQrNote && (
-                    <p className="text-[11px] text-blue-800 italic">{adminConfig.paymentQrNote}</p>
-                  )}
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <label className="block font-bold text-slate-800 text-[11px]">
-                  Mã giao dịch chuyển khoản (nếu không tải ảnh biên lai):
-                </label>
-                <input
-                  type="text"
-                  value={feeTransactionCode}
-                  onChange={(e) => setFeeTransactionCode(e.target.value)}
-                  placeholder="VD: FT2631500988"
-                  className="w-full p-2.5 border border-blue-300 rounded-xl bg-white font-mono font-bold text-xs"
-                />
-                <span className="block text-[10px] text-slate-500">
-                  R11 đạt khi có tệp Biên lai nộp phí (Mục B) hoặc nhập Mã giao dịch hợp lệ.
-                </span>
-              </div>
-            </div>
-
-            {/* Danh sách tệp nộp theo chuyến */}
-            {uploadedDocuments.filter((d) => !['REGISTRATION_CERT', 'TECH_SAFETY_CERT', 'CREW_CERTIFICATE'].includes(d.category)).length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                {uploadedDocuments
-                  .filter((d) => !['REGISTRATION_CERT', 'TECH_SAFETY_CERT', 'CREW_CERTIFICATE'].includes(d.category))
-                  .map((doc) => (
-                    <div
-                      key={doc.id}
-                      className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs hover:border-blue-300 transition space-y-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-start gap-2.5 min-w-0">
-                          <div
-                            className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-black text-xs ${
-                              doc.fileType === 'PDF'
-                                ? 'bg-red-100 text-red-700 border border-red-200'
-                                : 'bg-blue-100 text-blue-700 border border-blue-200'
-                            }`}
-                          >
-                            {doc.fileType}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-bold text-slate-900 truncate" title={doc.fileName}>
-                              {doc.fileName}
-                            </p>
-                            <span className="inline-block text-[10px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
-                              {doc.categoryName}
-                            </span>
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveUploadedDoc(doc.id)}
-                          className="text-slate-400 hover:text-red-600 p-1 rounded transition cursor-pointer"
-                          title="Xóa tệp này"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      {doc.note && (
-                        <p className="text-[11px] text-slate-600 bg-slate-50 p-1.5 rounded">
-                          Ghi chú: {doc.note}
+                      ) : (
+                        <p className="text-[11px] font-semibold text-red-700">
+                          Chưa có bản scan/ảnh Giấy đăng ký phương tiện. Vui lòng bấm Bổ sung.
                         </p>
                       )}
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        {regDoc ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setPreviewDocModal(regDoc)}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Xem</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={uploadingCategory === 'REGISTRATION_CERT'}
+                              onClick={() => triggerCategoryDocUpload('REGISTRATION_CERT')}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                            >
+                              {uploadingCategory === 'REGISTRATION_CERT' ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Upload className="w-3.5 h-3.5" />
+                              )}
+                              <span>Thay tệp</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveUploadedDoc(regDoc.id)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                              title="Xóa tệp"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={uploadingCategory === 'REGISTRATION_CERT'}
+                            onClick={() => triggerCategoryDocUpload('REGISTRATION_CERT')}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold bg-amber-600 hover:bg-amber-700 text-white inline-flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-60"
+                          >
+                            {uploadingCategory === 'REGISTRATION_CERT' ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Upload className="w-3.5 h-3.5" />
+                            )}
+                            <span>Bổ sung</span>
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
 
-                      <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[10px] text-slate-500">
-                        <span>Dung lượng: {doc.fileSize} • Lúc: {doc.uploadedAt}</span>
+                  {/* 2. GCN An toàn kỹ thuật & BVMT (Đăng kiểm) */}
+                  <tr className={!safetyDoc || isSafetyExpired ? 'bg-red-50/60' : 'hover:bg-slate-50/60'}>
+                    <td className="py-3 px-3 text-center font-bold text-slate-500">2</td>
+                    <td className="py-3 px-3">
+                      <p className="font-bold text-slate-900">Giấy CN an toàn kỹ thuật và BVMT (Đăng kiểm VR-SB)</p>
+                      <span className="inline-block mt-0.5 text-[10px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                        Bắt buộc • Hạn đăng kiểm: {selectedVessel?.registryExpireDate ? formatDate(selectedVessel.registryExpireDate) : 'Chưa rõ'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3">
+                      {!safetyDoc ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-red-100 text-red-800 border border-red-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          Thiếu — Cần bổ sung
+                        </span>
+                      ) : isSafetyExpired ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-red-100 text-red-800 border border-red-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          Hết hạn đăng kiểm
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Đã có (Còn hạn)
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3">
+                      {safetyDoc ? (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200">
+                              {safetyDoc.fileType}
+                            </span>
+                            <span className="font-semibold text-slate-900 truncate max-w-[240px]" title={safetyDoc.fileName}>
+                              {safetyDoc.fileName}
+                            </span>
+                          </div>
+                          <p className={`text-[11px] ${isSafetyExpired ? 'text-red-700 font-bold' : 'text-slate-500'}`}>
+                            {isSafetyExpired
+                              ? `Cảnh báo: Hết hạn đăng kiểm ngày ${formatDate(selectedVessel?.registryExpireDate)} — Cần bổ sung bản gia hạn mới.`
+                              : `Hiệu lực đến: ${safetyDoc.validUntil || formatDate(selectedVessel?.registryExpireDate)}`}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] font-semibold text-red-700">
+                          Chưa có Giấy CN an toàn KT &amp; BVMT. Vui lòng bấm Bổ sung.
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        {safetyDoc && (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewDocModal(safetyDoc)}
+                            className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Xem</span>
+                          </button>
+                        )}
+                        {!safetyDoc || isSafetyExpired ? (
+                          <button
+                            type="button"
+                            disabled={uploadingCategory === 'TECH_SAFETY_CERT'}
+                            onClick={() => triggerCategoryDocUpload('TECH_SAFETY_CERT')}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold bg-amber-600 hover:bg-amber-700 text-white inline-flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-60"
+                          >
+                            {uploadingCategory === 'TECH_SAFETY_CERT' ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Upload className="w-3.5 h-3.5" />
+                            )}
+                            <span>Bổ sung</span>
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              disabled={uploadingCategory === 'TECH_SAFETY_CERT'}
+                              onClick={() => triggerCategoryDocUpload('TECH_SAFETY_CERT')}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                            >
+                              {uploadingCategory === 'TECH_SAFETY_CERT' ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Upload className="w-3.5 h-3.5" />
+                              )}
+                              <span>Thay tệp</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveUploadedDoc(safetyDoc.id)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                              title="Xóa tệp"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+
+                  {/* 3. Bảo hiểm TNDS chủ tàu */}
+                  <tr className={!insuranceDoc || isInsuranceExpired ? 'bg-amber-50/70' : 'hover:bg-slate-50/60'}>
+                    <td className="py-3 px-3 text-center font-bold text-slate-500">3</td>
+                    <td className="py-3 px-3">
+                      <p className="font-bold text-slate-900">Giấy chứng nhận bảo hiểm trách nhiệm dân sự chủ tàu</p>
+                      <span className="inline-block mt-0.5 text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                        Hạn BH TNDS trên sổ tàu: {selectedVessel?.civilInsuranceExpireDate ? formatDate(selectedVessel.civilInsuranceExpireDate) : 'Chưa cập nhật'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3">
+                      {isInsuranceExpired ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-red-100 text-red-800 border border-red-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          Hết hạn BH TNDS
+                        </span>
+                      ) : insuranceDoc ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" />
+                          Đã đính kèm
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          Thiếu bản scan/ảnh
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3">
+                      {insuranceDoc ? (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200">
+                              {insuranceDoc.fileType}
+                            </span>
+                            <span className="font-semibold text-slate-900 truncate max-w-[240px]" title={insuranceDoc.fileName}>
+                              {insuranceDoc.fileName}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">
+                            {insuranceDoc.fileSize} • {insuranceDoc.uploadedAt}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className={`text-[11px] font-semibold ${isInsuranceExpired ? 'text-red-700' : 'text-amber-800'}`}>
+                          {isInsuranceExpired
+                            ? 'Bảo hiểm TNDS đã hết hạn — Vui lòng bổ sung giấy chứng nhận bảo hiểm mới.'
+                            : 'Chưa đính kèm ảnh/PDF Bảo hiểm TNDS. Bấm Bổ sung nếu có yêu cầu kiểm tra.'}
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        {insuranceDoc ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setPreviewDocModal(insuranceDoc)}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Xem</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={uploadingCategory === 'CIVIL_INSURANCE'}
+                              onClick={() => triggerCategoryDocUpload('CIVIL_INSURANCE')}
+                              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                            >
+                              {uploadingCategory === 'CIVIL_INSURANCE' ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Upload className="w-3.5 h-3.5" />
+                              )}
+                              <span>Thay tệp</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveUploadedDoc(insuranceDoc.id)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                              title="Xóa tệp"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={uploadingCategory === 'CIVIL_INSURANCE'}
+                            onClick={() => triggerCategoryDocUpload('CIVIL_INSURANCE')}
+                            className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold bg-amber-600 hover:bg-amber-700 text-white inline-flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-60"
+                          >
+                            {uploadingCategory === 'CIVIL_INSURANCE' ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Upload className="w-3.5 h-3.5" />
+                            )}
+                            <span>Bổ sung</span>
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+
+                  {/* NHÓM II: GIẤY CHỨNG NHẬN CHUYÊN MÔN THUYỀN VIÊN */}
+                  <tr className="bg-slate-50/90">
+                    <td colSpan={5} className="py-2 px-3 text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">
+                      II. Giấy chứng nhận khả năng chuyên môn thuyền viên trực ca ({crewCertChecks.length} người)
+                    </td>
+                  </tr>
+
+                  {crewCertChecks.map((check, idx) => {
+                    const crewIdx = crewMembers.findIndex(
+                      (c) => c.crewId === check.crewId && c.certNumber === check.certNumber
+                    );
+                    const targetIdx = crewIdx >= 0 ? crewIdx : idx;
+                    const memberRow = crewMembers[targetIdx];
+                    const linkedDoc = memberRow
+                      ? resolveCrewCertDoc(memberRow, check)
+                      : check.currentStep5Doc;
+                    const isUploadingCrew = uploadingCrewCertId === check.crewId;
+                    const rowStt = 4 + idx;
+
+                    return (
+                      <tr
+                        key={`${check.crewId}-${idx}`}
+                        className={
+                          check.requiresStep5Upload
+                            ? check.isExpired
+                              ? 'bg-red-50/60'
+                              : 'bg-amber-50/70'
+                            : 'hover:bg-slate-50/60'
+                        }
+                      >
+                        <td className="py-3 px-3 text-center font-bold text-slate-500">{rowStt}</td>
+                        <td className="py-3 px-3">
+                          <p className="font-bold text-slate-900">
+                            Chứng chỉ {check.positionTitle}:{' '}
+                            <span className="text-blue-800">{check.fullName || '(Chưa nhập họ tên)'}</span>
+                          </p>
+                          <p className="text-[11px] text-slate-600 font-mono mt-0.5">
+                            Số bằng: {check.certNumber || '---'} • Hạn: {check.effectiveExpireDate ? formatDate(check.effectiveExpireDate) : 'Chưa có'}
+                          </p>
+                        </td>
+                        <td className="py-3 px-3">
+                          {check.status === 'REUSE_VALID' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Đã có — Tự đọc lại
+                            </span>
+                          ) : check.status === 'UPLOADED_IN_STEP5' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-blue-100 text-blue-800 border border-blue-200">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Đã bổ sung hợp lệ
+                            </span>
+                          ) : check.status === 'EXPIRED_REQUIRE_UPLOAD' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-red-100 text-red-800 border border-red-300">
+                              <AlertTriangle className="w-3 h-3" />
+                              Hết hạn — Cần bổ sung
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                              <AlertTriangle className="w-3 h-3" />
+                              Thiếu — Cần bổ sung
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3">
+                          {linkedDoc && !check.requiresStep5Upload ? (
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold border ${
+                                    linkedDoc.fileType === 'PDF'
+                                      ? 'bg-red-50 text-red-700 border-red-200'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  }`}
+                                >
+                                  {linkedDoc.fileType === 'PDF' ? 'PDF' : 'ẢNH'}
+                                </span>
+                                <span className="font-semibold text-slate-900 truncate max-w-[230px]" title={linkedDoc.fileName}>
+                                  {linkedDoc.fileName}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500">
+                                {check.canReuse ? 'Đọc lại từ hệ thống (không cần tải lại)' : `Đã tải lên • ${linkedDoc.fileSize}`}
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5">
+                              <p className={`text-[11px] font-semibold ${check.isExpired ? 'text-red-700' : 'text-amber-900'}`}>
+                                {check.isExpired
+                                  ? 'Chứng chỉ đã hết hạn — Cập nhật ngày hết hạn mới & bổ sung ảnh/PDF.'
+                                  : 'Chưa có ảnh/file chứng chỉ trên hệ thống — Vui lòng bấm Bổ sung.'}
+                              </p>
+                              {check.isExpired && memberRow && (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <input
+                                    type="text"
+                                    value={memberRow.certNumber || ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setCrewMembers((prev) =>
+                                        prev.map((item, i) => (i === targetIdx ? { ...item, certNumber: val } : item))
+                                      );
+                                    }}
+                                    placeholder="Số bằng mới"
+                                    className="px-2 py-1 text-[11px] font-mono border border-slate-300 rounded-lg bg-white w-36"
+                                  />
+                                  <input
+                                    type="date"
+                                    value={memberRow.certExpireDate || ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setCrewMembers((prev) =>
+                                        prev.map((item, i) => (i === targetIdx ? { ...item, certExpireDate: val } : item))
+                                      );
+                                    }}
+                                    className={`px-2 py-1 text-[11px] font-bold border rounded-lg bg-white ${
+                                      (memberRow.certExpireDate || '') < todayIso
+                                        ? 'border-red-400 text-red-700'
+                                        : 'border-emerald-400 text-emerald-800'
+                                    }`}
+                                  />
+                                </div>
+                              )}
+                              {check.currentStep5Doc && (
+                                <p className="text-[10px] text-amber-800 font-semibold">
+                                  Tệp vừa chọn: {check.currentStep5Doc.fileName} (cần hạn ≥ {formatDate(todayIso)})
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
+                            {linkedDoc && (
+                              <button
+                                type="button"
+                                onClick={() => setPreviewDocModal(linkedDoc)}
+                                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Xem</span>
+                              </button>
+                            )}
+                            {check.requiresStep5Upload ? (
+                              <button
+                                type="button"
+                                disabled={isUploadingCrew}
+                                onClick={() => triggerCrewCertUpload(check.crewId)}
+                                className="px-3 py-1.5 rounded-lg text-[11px] font-extrabold bg-amber-600 hover:bg-amber-700 text-white inline-flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-60"
+                              >
+                                {isUploadingCrew ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Upload className="w-3.5 h-3.5" />
+                                )}
+                                <span>{isUploadingCrew ? 'Đang tải...' : 'Bổ sung'}</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={isUploadingCrew}
+                                onClick={() => triggerCrewCertUpload(check.crewId)}
+                                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                              >
+                                {isUploadingCrew ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Upload className="w-3.5 h-3.5" />
+                                )}
+                                <span>Thay tệp</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {/* NHÓM III: CHỨNG TỪ NỘP PHÍ, LỆ PHÍ CẢNG BẾN (R11) */}
+                  <tr className="bg-slate-50/90">
+                    <td colSpan={5} className="py-2 px-3 text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">
+                      III. Chứng từ nộp phí, lệ phí cảng bến chuyến này (Quy tắc R11)
+                    </td>
+                  </tr>
+
+                  <tr className={!hasValidFee ? 'bg-red-50/60' : 'hover:bg-slate-50/60'}>
+                    <td className="py-3 px-3 text-center font-bold text-slate-500">{4 + crewCertChecks.length}</td>
+                    <td className="py-3 px-3">
+                      <p className="font-bold text-slate-900">Biên lai nộp phí, lệ phí cảng vụ / Chứng từ chuyển khoản</p>
+                      <span className="inline-block mt-0.5 text-[10px] font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                        Bắt buộc (R11) • Tải ảnh/PDF biên lai hoặc nhập mã giao dịch
+                      </span>
+                    </td>
+                    <td className="py-3 px-3">
+                      {hasValidFee ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3" />
+                          {feeDocs.length > 0 ? `Đã có (${feeDocs.length} tệp)` : 'Đã có mã GD'}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-red-100 text-red-800 border border-red-300">
+                          <AlertTriangle className="w-3 h-3" />
+                          Thiếu — Cần bổ sung
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3">
+                      {feeDocs.length > 0 ? (
+                        <div className="space-y-1">
+                          {feeDocs.map((doc) => (
+                            <div key={doc.id} className="flex items-center justify-between gap-2 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-white text-slate-700 border border-slate-200 shrink-0">
+                                  {doc.fileType}
+                                </span>
+                                <span className="font-semibold text-slate-900 truncate max-w-[190px]" title={doc.fileName}>
+                                  {doc.fileName}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewDocModal(doc)}
+                                  className="text-blue-600 hover:underline font-bold text-[11px] px-1 cursor-pointer"
+                                >
+                                  Xem
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveUploadedDoc(doc.id)}
+                                  className="text-slate-400 hover:text-red-600 p-0.5 cursor-pointer"
+                                  title="Xóa biên lai"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                          {feeTransactionCode.trim() && (
+                            <p className="text-[11px] text-emerald-700 font-mono font-bold">
+                              Mã GD: {feeTransactionCode.trim()}
+                            </p>
+                          )}
+                        </div>
+                      ) : feeTransactionCode.trim() ? (
+                        <p className="text-[11px] font-mono font-bold text-emerald-800">
+                          Mã giao dịch chuyển khoản: {feeTransactionCode.trim()}
+                        </p>
+                      ) : (
+                        <p className="text-[11px] font-semibold text-red-700">
+                          Chưa có biên lai nộp phí hoặc mã giao dịch. Bấm Bổ sung hoặc nhập mã giao dịch bên dưới.
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
                         <button
                           type="button"
-                          onClick={() => setPreviewDocModal(doc)}
-                          className="text-blue-600 hover:underline font-bold flex items-center gap-0.5 cursor-pointer"
+                          disabled={uploadingCategory === 'FEE_RECEIPT'}
+                          onClick={() => triggerCategoryDocUpload('FEE_RECEIPT', false)}
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-extrabold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60 ${
+                            !hasValidFee
+                              ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-2xs'
+                              : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200'
+                          }`}
                         >
-                          <Eye className="w-3 h-3" />
-                          <span>Xem trước</span>
+                          {uploadingCategory === 'FEE_RECEIPT' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Upload className="w-3.5 h-3.5" />
+                          )}
+                          <span>{feeDocs.length > 0 ? 'Thêm biên lai' : 'Bổ sung'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={uploadingCategory === 'FEE_RECEIPT'}
+                          onClick={() => triggerCategoryDocUpload('FEE_RECEIPT', true)}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                          title="Chụp ảnh biên lai bằng camera"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>Chụp</span>
                         </button>
                       </div>
-                    </div>
-                  ))}
-              </div>
-            ) : (
-              <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>Chưa có Biên lai nộp phí cảng vụ cho chuyến này. Thuyền trưởng hãy chọn tệp hoặc chụp ảnh biên lai bên dưới.</span>
-              </div>
-            )}
+                    </td>
+                  </tr>
 
-            {/* KHUNG TẢI LÊN TỆP MỚI HOẶC CHỤP ẢNH TỪ CAMERA */}
-            <div className="p-4 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-300 space-y-4 mt-3">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <span className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
-                  <Upload className="w-4 h-4 text-blue-600" />
-                  Tải lên tệp mới hoặc bổ sung giấy tờ:
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  Hỗ trợ tệp PDF, JPG, PNG (Tối đa 15MB)
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Phân loại giấy tờ (*):
-                  </label>
-                  <select
-                    value={selectedDocCategory}
-                    onChange={(e) => setSelectedDocCategory(e.target.value as any)}
-                    className="w-full p-2.5 text-base sm:text-xs font-bold border border-slate-300 rounded-xl bg-white"
-                  >
-                    <option value="FEE_RECEIPT">1. Biên lai / Giấy tờ nộp phí, lệ phí cảng vụ (Chuyến này)</option>
-                    <option value="CIVIL_INSURANCE">2. Bảo hiểm trách nhiệm dân sự chủ tàu</option>
-                    <option value="REGISTRATION_CERT">3. Bản scan mới Giấy đăng ký phương tiện</option>
-                    <option value="TECH_SAFETY_CERT">4. Bản scan mới Giấy CN an toàn KT/BVMT</option>
-                    <option value="CREW_CERTIFICATE">5. Chứng chỉ chuyên môn thuyền viên bổ sung</option>
-                    <option value="OTHER">6. Giấy tờ, hợp đồng vận chuyển khác</option>
-                  </select>
-                </div>
-
-                {selectedDocCategory === 'CREW_CERTIFICATE' && (
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Gắn cho thuyền viên (*):
-                    </label>
-                    <select
-                      value={selectedCertCrewId || crewMembers[0]?.crewId || selectedCaptainId}
-                      onChange={(e) => setSelectedCertCrewId(e.target.value)}
-                      className="w-full p-2.5 text-base sm:text-xs font-bold border border-blue-300 rounded-xl bg-blue-50/40"
-                    >
-                      {crewMembers.map((cm) => (
-                        <option key={cm.crewId} value={cm.crewId}>
-                          {cm.positionTitle}: {cm.fullName} ({cm.certNumber})
-                        </option>
+                  {/* NHÓM IV: GIẤY TỜ BỔ SUNG KHÁC (NẾU CÓ) */}
+                  {otherDocs.length > 0 && (
+                    <>
+                      <tr className="bg-slate-50/90">
+                        <td colSpan={5} className="py-2 px-3 text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">
+                          IV. Giấy tờ, biên bản bổ sung khác ({otherDocs.length} tệp)
+                        </td>
+                      </tr>
+                      {otherDocs.map((doc, oIdx) => (
+                        <tr key={doc.id} className="hover:bg-slate-50/60">
+                          <td className="py-3 px-3 text-center font-bold text-slate-500">
+                            {5 + crewCertChecks.length + oIdx}
+                          </td>
+                          <td className="py-3 px-3">
+                            <p className="font-bold text-slate-900">{doc.categoryName}</p>
+                            {doc.note && <p className="text-[11px] text-slate-500">{doc.note}</p>}
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-blue-100 text-blue-800 border border-blue-200">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Đã đính kèm
+                            </span>
+                          </td>
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200">
+                                {doc.fileType}
+                              </span>
+                              <span className="font-semibold text-slate-900 truncate max-w-[240px]" title={doc.fileName}>
+                                {doc.fileName}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-500">{doc.fileSize} • {doc.uploadedAt}</p>
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <div className="inline-flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewDocModal(doc)}
+                                className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Xem</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveUploadedDoc(doc.id)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                                title="Xóa tệp"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
                       ))}
-                    </select>
-                  </div>
-                )}
+                    </>
+                  )}
+                </tbody>
+              </table>
+            </div>
 
-                <div className={selectedDocCategory === 'CREW_CERTIFICATE' ? 'sm:col-span-1' : 'sm:col-span-2'}>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Ghi chú hoặc số hiệu giấy tờ (Không bắt buộc):
-                  </label>
-                  <input
-                    type="text"
-                    value={docNoteInput}
-                    onChange={(e) => setDocNoteInput(e.target.value)}
-                    placeholder="VD: Biên lai số BL-2026-0982, chứng chỉ thuyền trưởng..."
-                    className="w-full p-2.5 text-base sm:text-xs border border-slate-300 rounded-xl bg-white"
-                  />
-                </div>
+            {/* Thanh bổ sung giấy tờ khác ở cuối bảng */}
+            <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+              <div className="flex flex-wrap items-center gap-2 flex-1 min-w-[220px]">
+                <input
+                  type="text"
+                  value={docNoteInput}
+                  onChange={(e) => setDocNoteInput(e.target.value)}
+                  placeholder="Ghi chú / số hiệu giấy tờ khác muốn đính kèm thêm (không bắt buộc)..."
+                  className="flex-1 min-w-[200px] px-3 py-1.5 text-xs border border-slate-300 rounded-xl bg-white"
+                />
               </div>
-
-              {/* Các nút bấm tải tệp: Chọn từ máy hoặc chụp từ Camera */}
-              <div className="flex items-center gap-3 flex-wrap pt-1">
-                <input
-                  type="file"
-                  ref={docFileInputRef}
-                  onChange={handleAddUploadedFile}
-                  accept=".pdf,.jpg,.jpeg,.png,.webp,image/*,application/pdf"
-                  className="hidden"
-                />
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
-                  onClick={() => docFileInputRef.current?.click()}
-                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs cursor-pointer transition"
+                  disabled={uploadingCategory === 'OTHER'}
+                  onClick={() => triggerCategoryDocUpload('OTHER', false)}
+                  className="px-3 py-1.5 bg-[#072b61] hover:bg-[#0c4a9c] text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition disabled:opacity-60"
                 >
-                  <Upload className="w-4 h-4" />
-                  <span>Chọn tệp từ máy (PDF / Ảnh)</span>
+                  {uploadingCategory === 'OTHER' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="w-3.5 h-3.5" />
+                  )}
+                  <span>Bổ sung giấy tờ khác (PDF / Ảnh)</span>
                 </button>
-
-                <input
-                  type="file"
-                  ref={cameraInputRef}
-                  onChange={handleAddUploadedFile}
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                />
                 <button
                   type="button"
-                  onClick={() => cameraInputRef.current?.click()}
-                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs cursor-pointer transition"
+                  disabled={uploadingCategory === 'OTHER'}
+                  onClick={() => triggerCategoryDocUpload('OTHER', true)}
+                  className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition disabled:opacity-60"
                 >
-                  <Camera className="w-4 h-4" />
-                  <span>Chụp ảnh từ camera điện thoại tại bến</span>
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>Chụp camera</span>
                 </button>
               </div>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ======================================================== */}
-      {/* BƯỚC 6: NỘP HỒ SƠ (THEO YÊU CẦU MỚI) */}
+      {/* BƯỚC 6: DANH SÁCH KẾT QUẢ KIỂM TRA TÀU, THUYỀN VIÊN, HÀNG HÓA & GIẤY TỜ */}
       {/* ======================================================== */}
-      {currentStep === 6 && (
-        <div className="space-y-6">
-          <div className="border-b pb-3 flex items-center justify-between flex-wrap gap-2">
+      {currentStep === 6 && (() => {
+        const { totalCount, passedCount, warningCount, blockingCount, items } = step6InspectionSummary;
+
+        const filteredItems =
+          step6RuleFilter === 'ALL'
+            ? items
+            : items.filter((item) => item.status === step6RuleFilter);
+
+        const groupOrder: Array<{
+          key: 'TAU' | 'THUYEN_VIEN' | 'HANG_HOA' | 'GIAY_TO_TAU';
+          title: string;
+        }> = [
+          { key: 'TAU', title: 'I. Kiểm tra phương tiện (Tàu)' },
+          { key: 'THUYEN_VIEN', title: 'II. Kiểm tra thuyền viên' },
+          { key: 'HANG_HOA', title: 'III. Kiểm tra hàng hóa' },
+          { key: 'GIAY_TO_TAU', title: 'IV. Kiểm tra giấy tờ liên quan đến thuyền' },
+        ];
+
+        let rowSerial = 0;
+
+        return (
+        <div className="space-y-5">
+          {/* Tiêu đề & Công cụ hỗ trợ */}
+          <div className="border-b border-slate-200 pb-3 flex items-center justify-between flex-wrap gap-2">
             <div>
               <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-blue-600" />
-                Kiểm tra R1–R11, AI rà soát &amp; Gửi Ban Quản lý Cảng
+                <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0" />
+                Bước 6: Danh sách kết quả kiểm tra &amp; Nộp hồ sơ
               </h2>
-              <p className="text-xs text-slate-500">
-                Hệ thống tự động kiểm tra quy tắc an toàn, chứng từ nộp phí (R11) và AI rà soát trước khi chuyển Ban Quản lý Cảng
+              <p className="text-xs text-slate-500 mt-0.5">
+                Phương tiện: <strong className="text-slate-800">{selectedVessel?.name} ({selectedVessel?.regNumber})</strong> · Kiểm tra tàu, thuyền viên, hàng hóa và giấy tờ liên quan đến thuyền
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleRunAiAnalysis}
-                disabled={isAiAnalyzing}
-                className="px-3 py-1.5 text-xs font-bold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-purple-600" />
-                <span>{isAiAnalyzing ? 'Đang rà soát AI...' : 'AI Rà soát bất thường'}</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={() => setShowAiChatDrawer(true)}
-                className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center gap-1.5 cursor-pointer"
+                className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
               >
                 <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
                 <span>Chat hướng dẫn</span>
@@ -3540,189 +4288,251 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
             </div>
           </div>
 
-          {/* Báo cáo rà soát AI */}
-          {aiAnalysis && (
-            <div className="p-4 bg-purple-50/70 border border-purple-300 rounded-2xl space-y-3 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-purple-600" />
-                  <span className="text-xs font-bold text-purple-950 uppercase">
-                    Kết quả rà soát bất thường tự động (Gemini AI)
-                  </span>
-                </div>
-                <span className="text-[11px] font-semibold text-purple-700">
-                  Điểm an toàn: <strong>{aiAnalysis.score}/100</strong>
+          {/* Thanh tổng hợp kết quả kiểm tra & Bộ lọc trạng thái */}
+          <div
+            className={`p-3.5 rounded-2xl border flex flex-wrap items-center justify-between gap-3 text-xs ${
+              blockingCount > 0
+                ? 'bg-red-50/90 border-red-300 text-red-950'
+                : warningCount > 0
+                ? 'bg-amber-50/90 border-amber-300 text-amber-950'
+                : 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              {blockingCount > 0 ? (
+                <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
+              ) : warningCount > 0 ? (
+                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              )}
+              <div>
+                <p className="font-extrabold">
+                  {blockingCount > 0
+                    ? `Chưa đủ điều kiện nộp: Còn ${blockingCount} hạng mục không đạt cần khắc phục`
+                    : warningCount > 0
+                    ? `Đủ điều kiện nộp kèm xác nhận: Có ${warningCount} hạng mục cảnh báo cần lưu ý`
+                    : 'Đạt đầy đủ kiểm tra tàu, thuyền viên, hàng hóa & giấy tờ — Đủ điều kiện gửi hồ sơ'}
+                </p>
+                <p className="text-[11px] opacity-85 tabular-nums mt-0.5">
+                  Đạt: <strong>{passedCount}/{totalCount}</strong>
+                  <span className="mx-1.5" aria-hidden="true">·</span>
+                  Cảnh báo: <strong>{warningCount}</strong>
+                  <span className="mx-1.5" aria-hidden="true">·</span>
+                  Không đạt: <strong>{blockingCount}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1 p-1 bg-white/90 border border-slate-200 rounded-xl shrink-0">
+              <button
+                type="button"
+                onClick={() => setStep6RuleFilter('ALL')}
+                className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer whitespace-nowrap tabular-nums ${
+                  step6RuleFilter === 'ALL'
+                    ? 'bg-[#072b61] text-white'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                Tất cả ({totalCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep6RuleFilter('FAILED')}
+                className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer whitespace-nowrap tabular-nums ${
+                  step6RuleFilter === 'FAILED'
+                    ? 'bg-red-600 text-white'
+                    : 'text-red-700 hover:bg-red-50'
+                }`}
+              >
+                Không đạt ({blockingCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep6RuleFilter('WARNING')}
+                className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer whitespace-nowrap tabular-nums ${
+                  step6RuleFilter === 'WARNING'
+                    ? 'bg-amber-600 text-white'
+                    : 'text-amber-800 hover:bg-amber-50'
+                }`}
+              >
+                Cảnh báo ({warningCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep6RuleFilter('PASSED')}
+                className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer whitespace-nowrap tabular-nums ${
+                  step6RuleFilter === 'PASSED'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-emerald-700 hover:bg-emerald-50'
+                }`}
+              >
+                Đạt ({passedCount})
+              </button>
+            </div>
+          </div>
+
+          {/* DANH SÁCH KẾT QUẢ KIỂM TRA: TÀU, THUYỀN VIÊN, HÀNG HÓA & GIẤY TỜ LIÊN QUAN ĐẾN THUYỀN */}
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-xs border-collapse">
+                <thead className="bg-[#edf4fe] text-[#07244d] text-[11px] font-extrabold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-3 w-12 text-center">STT</th>
+                    <th className="py-3 px-3 w-20">Mã</th>
+                    <th className="py-3 px-3 w-[27%]">Hạng mục kiểm tra</th>
+                    <th className="py-3 px-3 w-36">Kết quả</th>
+                    <th className="py-3 px-3">Chi tiết đánh giá</th>
+                    <th className="py-3 px-3 w-36 text-right">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {filteredItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 px-4 text-center text-slate-500">
+                        <p className="font-medium">Không có hạng mục kiểm tra nào thuộc trạng thái đang lọc.</p>
+                        <button
+                          type="button"
+                          onClick={() => setStep6RuleFilter('ALL')}
+                          className="mt-2 text-blue-700 hover:underline font-bold cursor-pointer"
+                        >
+                          Hiển thị toàn bộ {totalCount} hạng mục
+                        </button>
+                      </td>
+                    </tr>
+                  ) : (
+                    groupOrder.map((grp) => {
+                      const groupItems = filteredItems.filter((item) => item.groupKey === grp.key);
+                      if (groupItems.length === 0) return null;
+
+                      return (
+                        <React.Fragment key={grp.key}>
+                          <tr className="bg-slate-50/95">
+                            <td
+                              colSpan={6}
+                              className="py-2 px-3 text-[11px] font-extrabold text-[#07244d] tracking-wide"
+                            >
+                              {grp.title}
+                            </td>
+                          </tr>
+                          {groupItems.map((item) => {
+                            rowSerial += 1;
+                            const isFailed = item.status === 'FAILED';
+                            const isWarning = item.status === 'WARNING';
+
+                            return (
+                              <tr
+                                key={item.code}
+                                className={
+                                  isFailed
+                                    ? 'bg-red-50/55 hover:bg-red-50/85 transition-colors'
+                                    : isWarning
+                                    ? 'bg-amber-50/45 hover:bg-amber-50/80 transition-colors'
+                                    : 'hover:bg-slate-50/70 transition-colors'
+                                }
+                              >
+                                <td className="py-3 px-3 text-center font-semibold text-slate-500 tabular-nums align-top">
+                                  {rowSerial}
+                                </td>
+                                <td className="py-3 px-3 font-mono font-extrabold text-slate-800 align-top whitespace-nowrap">
+                                  {item.code}
+                                </td>
+                                <td className="py-3 px-3 align-top">
+                                  <p className="font-bold text-slate-900 leading-snug">{item.title}</p>
+                                  <p className="text-[11px] text-slate-500 mt-0.5">
+                                    {item.severity === 'BLOCKING' ? 'Điều kiện bắt buộc' : 'Theo dõi / Cảnh báo'}
+                                  </p>
+                                </td>
+                                <td className="py-3 px-3 align-top whitespace-nowrap">
+                                  {isFailed ? (
+                                    <span className="inline-flex items-center gap-1.5 font-extrabold text-red-700">
+                                      <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                                      <span>Không đạt</span>
+                                    </span>
+                                  ) : isWarning ? (
+                                    <span className="inline-flex items-center gap-1.5 font-extrabold text-amber-700">
+                                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                                      <span>Cảnh báo</span>
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1.5 font-bold text-emerald-700">
+                                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                      <span>Đạt</span>
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3 align-top">
+                                  <p
+                                    className={`leading-relaxed ${
+                                      isFailed
+                                        ? 'text-red-950 font-semibold'
+                                        : isWarning
+                                        ? 'text-amber-950 font-medium'
+                                        : 'text-slate-700'
+                                    }`}
+                                  >
+                                    {item.message}
+                                  </p>
+                                  {item.details && (
+                                    <p className="text-[11px] text-slate-500 mt-0.5">{item.details}</p>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3 text-right align-top whitespace-nowrap">
+                                  {isFailed ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStepChange(item.targetStep)}
+                                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-red-600 hover:bg-red-700 text-white inline-flex items-center gap-1 cursor-pointer transition"
+                                    >
+                                      <span>Sửa {item.targetLabel}</span>
+                                      <ChevronRight className="w-3.5 h-3.5" />
+                                    </button>
+                                  ) : isWarning ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStepChange(item.targetStep)}
+                                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 inline-flex items-center gap-1 cursor-pointer transition"
+                                    >
+                                      <span>Xem {item.targetLabel}</span>
+                                      <ChevronRight className="w-3.5 h-3.5" />
+                                    </button>
+                                  ) : (
+                                    <span className="text-[11px] text-slate-400 font-medium">{item.targetLabel}</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Tóm lược hồ sơ & Xem trước 3 biểu mẫu điện tử */}
+          <div className="bg-slate-50/80 rounded-2xl border border-slate-200 overflow-hidden text-xs">
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-extrabold text-slate-900">
+                  Tóm lược hồ sơ chuyến đi
+                </span>
+                <span className="text-slate-400" aria-hidden="true">·</span>
+                <span className="text-blue-700 font-bold tabular-nums">
+                  {uploadedDocuments.length} tệp đính kèm
                 </span>
               </div>
 
-              <p className="text-xs text-purple-900 font-medium">
-                {aiAnalysis.overallComment}
-              </p>
-
-              {aiAnalysis.anomalies.length > 0 && (
-                <div className="space-y-2 pt-1">
-                  {aiAnalysis.anomalies.map((anom, idx) => (
-                    <div
-                      key={idx}
-                      className="p-2.5 bg-white rounded-xl border border-purple-200 text-xs space-y-1 shadow-2xs"
-                    >
-                      <div className="flex items-center justify-between">
-                        <strong className="text-red-700">{anom.title}</strong>
-                        <span className="text-[10px] uppercase font-bold text-slate-400">
-                          {anom.type}
-                        </span>
-                      </div>
-                      <p className="text-slate-700">{anom.description}</p>
-                      <p className="text-emerald-700 font-semibold">
-                        Gợi ý sửa: {anom.suggestion}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <p className="text-[10px] text-purple-600 italic">
-                * Do AI gợi ý – người khai/cán bộ chịu trách nhiệm xác nhận tính chính xác.
-              </p>
-            </div>
-          )}
-
-          {/* CẢNH BÁO CHẶN NẾU CÒN CHỨNG CHỈ THUYỀN VIÊN HẾT HẠN HOẶC CHƯA CUNG CẤP Ở BƯỚC 5 */}
-          {missingOrExpiredCrewCerts.length > 0 && (
-            <div className="p-4 bg-red-50 border-2 border-red-300 rounded-2xl text-xs text-red-950 space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 font-extrabold text-sm text-red-800">
-                  <ShieldAlert className="w-5 h-5 text-red-600 shrink-0" />
-                  <span>
-                    Yêu cầu Thuyền trưởng cung cấp chứng chỉ thuyền viên tại Bước 5 ({missingOrExpiredCrewCerts.length} trường hợp)
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleStepChange(5)}
-                  className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-xs cursor-pointer shadow-xs"
-                >
-                  Quay lại Bước 5 cung cấp chứng chỉ
-                </button>
-              </div>
-              <ul className="list-disc pl-5 space-y-1 text-[11px]">
-                {missingOrExpiredCrewCerts.map((c, i) => (
-                  <li key={i}>
-                    <strong>{c.fullName || c.positionTitle}</strong> ({c.certNumber || 'Chưa có số bằng'}): {c.reasonText}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* KẾT QUẢ ĐÁNH GIÁ QUY TẮC AN TOÀN */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                Kết quả kiểm tra tự động R1–R12:
-              </span>
-              <div className="flex items-center gap-2 text-xs">
-                {evaluation.blockingCount > 0 ? (
-                  <span className="px-3 py-1 bg-red-600 text-white rounded-full font-bold">
-                    Có {evaluation.blockingCount} lỗi chặn gửi (Đỏ)
-                  </span>
-                ) : (
-                  <span className="px-3 py-1 bg-emerald-600 text-white rounded-full font-bold">
-                    Đủ điều kiện gửi hồ sơ
-                  </span>
-                )}
-                {evaluation.warningCount > 0 && (
-                  <span className="px-2.5 py-1 bg-amber-500 text-slate-950 rounded-full font-bold">
-                    {evaluation.warningCount} cảnh báo (Vàng)
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-              {evaluation.results.map((r) => (
-                <div
-                  key={r.ruleCode}
-                  className={`p-3 rounded-xl border flex items-start gap-2.5 ${
-                    r.status === 'FAILED'
-                      ? 'bg-red-50 border-red-300 text-red-950'
-                      : r.status === 'WARNING'
-                      ? 'bg-amber-50 border-amber-300 text-amber-950'
-                      : 'bg-emerald-50/60 border-emerald-200 text-emerald-950'
-                  }`}
-                >
-                  {r.status === 'FAILED' ? (
-                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                  ) : r.status === 'WARNING' ? (
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  )}
-                  <div>
-                    <p className="font-bold">
-                      [{r.ruleCode}] {r.ruleName}
-                    </p>
-                    <p className="mt-0.5 text-[11px] leading-relaxed">{r.message}</p>
-                    {r.details && <p className="text-[10px] text-slate-500 mt-1 italic">{r.details}</p>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Tóm tắt hồ sơ & Giấy tờ đã đính kèm */}
-          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-slate-800 uppercase">
-                Tóm lược hồ sơ chuyến đi chuẩn bị nộp:
-              </span>
-              <span className="font-bold text-blue-700">
-                {uploadedDocuments.length} tệp giấy tờ đính kèm
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-slate-700 bg-white p-3 rounded-xl border border-slate-200">
-              <div>Phương tiện: <strong>{selectedVessel.name}</strong></div>
-              <div>Số khách: <strong>{passengers.length} người</strong></div>
-              <div>Hàng hóa: <strong>{cargoTons} tấn</strong></div>
-              <div>Thuyền viên: <strong>{crewMembers.length} người</strong></div>
-              <div>Tuyến: <strong>{currentDraftTrip.routeName}</strong></div>
-              <div>Giờ rời: <strong>{departureHour}:{departureMinute} {formatDate(departureDate)}</strong></div>
-              <div>Người khai: <strong>{currentDraftTrip.actualDeclarantName}</strong></div>
-              <div>
-                Phí/Lệ phí (R11):{' '}
-                <strong>
-                  {uploadedDocuments.some((d) => d.category === 'FEE_RECEIPT')
-                    ? 'Đã đính kèm biên lai'
-                    : feeTransactionCode.trim()
-                    ? `Mã GD: ${feeTransactionCode.trim()}`
-                    : 'Chưa có'}
-                </strong>
-              </div>
-            </div>
-          </div>
-
-          {/* XEM TRƯỚC 3 BIỂU MẪU PDF CHUẨN GIẤY */}
-          <div className="p-4 bg-blue-50/60 rounded-2xl border border-blue-200 space-y-3">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <h4 className="text-xs font-bold text-slate-900 uppercase">
-                  Xem trước 3 biểu mẫu điện tử chuẩn giấy:
-                </h4>
-                <p className="text-[11px] text-slate-500">
-                  Hệ thống tự động sinh 3 biểu mẫu đối chiếu có chữ ký điện tử
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={() => {
                     setPreviewTab('GENERAL');
                     setPreviewModalOpen(true);
                   }}
-                  className="px-3 py-1.5 text-xs font-bold bg-white hover:bg-slate-100 text-blue-700 border border-slate-300 rounded-xl transition cursor-pointer shadow-2xs"
+                  className="px-3 py-1.5 text-xs font-bold bg-white hover:bg-slate-100 text-blue-700 border border-slate-300 rounded-xl transition cursor-pointer whitespace-nowrap"
                 >
                   1. Bản khai chung
                 </button>
@@ -3732,7 +4542,7 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
                     setPreviewTab('CREW');
                     setPreviewModalOpen(true);
                   }}
-                  className="px-3 py-1.5 text-xs font-bold bg-white hover:bg-slate-100 text-blue-700 border border-slate-300 rounded-xl transition cursor-pointer shadow-2xs"
+                  className="px-3 py-1.5 text-xs font-bold bg-white hover:bg-slate-100 text-blue-700 border border-slate-300 rounded-xl transition cursor-pointer whitespace-nowrap"
                 >
                   2. DS Thuyền viên
                 </button>
@@ -3742,43 +4552,80 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
                     setPreviewTab('PASSENGER');
                     setPreviewModalOpen(true);
                   }}
-                  className="px-3 py-1.5 text-xs font-bold bg-white hover:bg-slate-100 text-blue-700 border border-slate-300 rounded-xl transition cursor-pointer shadow-2xs"
+                  className="px-3 py-1.5 text-xs font-bold bg-white hover:bg-slate-100 text-blue-700 border border-slate-300 rounded-xl transition cursor-pointer whitespace-nowrap"
                 >
                   3. DS Hành khách
                 </button>
               </div>
             </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2.5 p-4 bg-white text-[11px] text-slate-700 tabular-nums">
+              <div>
+                <span className="text-slate-500">Phương tiện: </span>
+                <strong className="text-slate-900">{selectedVessel.name}</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Hành khách: </span>
+                <strong className="text-slate-900">{passengers.length}/{selectedVessel.maxPassengers} người</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Hàng hóa: </span>
+                <strong className="text-slate-900">{cargoTons}/{selectedVessel.maxCargoTons} tấn</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Thuyền viên: </span>
+                <strong className="text-slate-900">{crewMembers.length} người</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Tuyến: </span>
+                <strong className="text-slate-900">{currentDraftTrip.routeName}</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Giờ rời: </span>
+                <strong className="text-slate-900">{departureHour}:{departureMinute} {formatDate(departureDate)}</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Áo phao: </span>
+                <strong className="text-slate-900">{actualLifeJackets} cái</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Người khai: </span>
+                <strong className="text-slate-900">{currentDraftTrip.actualDeclarantName}</strong>
+              </div>
+            </div>
           </div>
 
-          {/* CAM KẾT NẾU CÓ CẢNH BÁO */}
-          {evaluation.hasWarning && (
-            <div className="p-3 bg-amber-50 rounded-xl border border-amber-300 text-xs">
-              <label className="flex items-start gap-2 cursor-pointer font-bold text-amber-950">
+          {/* Cam kết nếu có cảnh báo */}
+          {step6InspectionSummary.hasWarning && (
+            <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-300 text-xs">
+              <label className="flex items-start gap-2.5 cursor-pointer font-bold text-amber-950">
                 <input
                   type="checkbox"
                   checked={acceptedWarningConsent}
                   onChange={(e) => setAcceptedWarningConsent(e.target.checked)}
-                  className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 mt-0.5"
+                  className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 mt-0.5 shrink-0"
                 />
                 <span>
-                  Tôi đã đọc và xác nhận các điểm cảnh báo (Vàng) nêu trên, cam đoan các thông tin kê khai và giấy tờ tải lên là hoàn toàn chính xác, chịu trách nhiệm trước pháp luật.
+                  Tôi đã đọc và xác nhận các hạng mục cảnh báo trong danh sách kết quả kiểm tra nêu trên, cam đoan thông tin kê khai và giấy tờ đính kèm là chính xác, chịu trách nhiệm trước pháp luật.
                 </span>
               </label>
             </div>
           )}
 
-          {/* XÁC NHẬN THIẾT BỊ VÀ NGƯỜI KHAI */}
-          <div className="p-3 bg-slate-100 rounded-xl text-xs text-slate-600 flex items-center justify-between flex-wrap gap-2">
+          {/* Xác nhận người khai và thiết bị */}
+          <div className="px-3.5 py-2.5 bg-slate-100 rounded-xl text-xs text-slate-600 flex items-center justify-between flex-wrap gap-2 tabular-nums">
             <div>
-              <span>Người xác nhận: <strong>{currentDraftTrip.actualDeclarantName}</strong></span> •{' '}
-              <span>Thời điểm: <strong>{new Date().toLocaleTimeString('vi-VN')} ngày {new Date().toLocaleDateString('vi-VN')}</strong></span>
+              <span>Người xác nhận: <strong className="text-slate-800">{currentDraftTrip.actualDeclarantName}</strong></span>
+              <span className="mx-1.5" aria-hidden="true">·</span>
+              <span>Thời điểm: <strong className="text-slate-800">{new Date().toLocaleTimeString('vi-VN')} ngày {new Date().toLocaleDateString('vi-VN')}</strong></span>
             </div>
-            <span className="text-[11px] text-slate-500 italic">
+            <span className="text-[11px] text-slate-500">
               Thiết bị: {currentDraftTrip.confirmationDevice}
             </span>
           </div>
         </div>
-      )}
+        );
+      })()}
         </div>
 
         {/* FOOTER CỦA FORM CÁC BƯỚC */}
@@ -3829,7 +4676,7 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
             ) : (
               <button
                 type="button"
-                disabled={evaluation.hasBlockingFailure || isBpBlocked}
+                disabled={step6InspectionSummary.hasBlockingFailure || isBpBlocked}
                 onClick={handleSubmitTrip}
                 className="px-8 py-4 text-base font-black text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-xl flex items-center gap-3 shadow-lg transition cursor-pointer"
               >
@@ -3851,7 +4698,16 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
         allowUnmask={true}
       />
 
-      {/* MODAL XEM TRƯỚC TỆP TÀI LIỆU ĐÍNH KÈM (BƯỚC 5) */}
+      {/* INPUT TẢI ẢNH / PDF GIẤY CHỨNG NHẬN THUYỀN VIÊN (DÙNG CHUNG BƯỚC 2 & BƯỚC 5) */}
+      <input
+        ref={step5CrewUploadInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.webp,image/*,application/pdf"
+        onChange={handleStep5CrewFileSelected}
+        className="hidden"
+      />
+
+      {/* MODAL XEM TRƯỚC TỆP TÀI LIỆU ĐÍNH KÈM (BƯỚC 2 & BƯỚC 5) */}
       <DocumentPreviewModal
         isOpen={Boolean(previewDocModal)}
         onClose={() => setPreviewDocModal(null)}
@@ -4002,6 +4858,349 @@ export const CreateTripPage: React.FC<CreateTripPageProps> = ({
                 Xác nhận rút hồ sơ
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL THÊM HÀNH KHÁCH (BƯỚC 3) */}
+      {showAddPaxForm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-passenger-modal-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              closeAddPassengerModal();
+            }
+          }}
+        >
+          <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header modal */}
+            <div className="px-6 py-4 bg-[#f4f8ff] border-b border-slate-200 flex items-start justify-between gap-4 shrink-0">
+              <div className="min-w-0">
+                <h3
+                  id="add-passenger-modal-title"
+                  className="text-base font-extrabold text-[#07244d] flex items-center gap-2"
+                >
+                  <UserCheck className="w-5 h-5 text-blue-600 shrink-0" />
+                  <span>Thêm hành khách vào chuyến</span>
+                </h3>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600 tabular-nums">
+                  <span>Hành khách số #{passengers.length + 1}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Hiện có <strong className="text-slate-900">{passengers.length}</strong> /{' '}
+                    <strong className="text-slate-900">{selectedVessel?.maxPassengers || 0}</strong> khách
+                  </span>
+                  {selectedVessel && passengers.length >= selectedVessel.maxPassengers && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-bold text-red-600">
+                        {passengers.length > selectedVessel.maxPassengers
+                          ? `Đang vượt ${passengers.length - selectedVessel.maxPassengers} chỗ`
+                          : 'Đã đạt giới hạn sức chở tàu'}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeAddPassengerModal}
+                aria-label="Đóng cửa sổ thêm hành khách"
+                className="p-2 -mr-1 -mt-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 rounded-xl transition cursor-pointer shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Body form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleAddPassenger(false);
+              }}
+              className="flex flex-col flex-1 min-h-0"
+            >
+              <div className="px-6 py-5 overflow-y-auto space-y-5 text-xs">
+                {paxFormError && (
+                  <div className="px-3.5 py-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 font-semibold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{paxFormError}</span>
+                  </div>
+                )}
+
+                {/* Nhóm 1: Thông tin định danh */}
+                <div className="space-y-3.5">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                    <h4 className="text-xs font-bold text-[#07244d]">1. Thông tin định danh</h4>
+                    <span className="text-[11px] text-slate-400">Các trường có dấu (*) là bắt buộc</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5">
+                    <div className="sm:col-span-8">
+                      <label htmlFor="pax-full-name" className="block font-semibold text-slate-700 mb-1.5">
+                        Họ và tên <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        id="pax-full-name"
+                        ref={newPaxNameInputRef}
+                        type="text"
+                        value={newPaxName}
+                        onChange={(e) => {
+                          setNewPaxName(e.target.value);
+                          if (paxFormError) setPaxFormError('');
+                        }}
+                        placeholder="VD: Nguyễn Văn An"
+                        className="w-full px-3.5 py-2.5 text-sm font-bold text-slate-900 border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-4">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label htmlFor="pax-birth-year" className="font-semibold text-slate-700">
+                          Năm sinh <span className="text-rose-600">*</span>
+                        </label>
+                        {Number.isFinite(newPaxBirthYear) && newPaxBirthYear >= 1900 && newPaxBirthYear <= 2026 && (
+                          <span className="text-[11px] text-slate-500 tabular-nums">
+                            {2026 - newPaxBirthYear} tuổi
+                          </span>
+                        )}
+                      </div>
+                      <input
+                        id="pax-birth-year"
+                        type="number"
+                        min={1900}
+                        max={2026}
+                        value={newPaxBirthYear}
+                        onChange={(e) => {
+                          setNewPaxBirthYear(parseInt(e.target.value, 10) || 1990);
+                          if (paxFormError) setPaxFormError('');
+                        }}
+                        className="w-full px-3.5 py-2.5 text-sm font-semibold tabular-nums text-slate-900 border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-6">
+                      <span className="block font-semibold text-slate-700 mb-1.5">Giới tính</span>
+                      <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
+                        {(
+                          [
+                            { value: 'NAM', label: 'Nam' },
+                            { value: 'NU', label: 'Nữ' },
+                            { value: 'KHAC', label: 'Khác' },
+                          ] as const
+                        ).map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => setNewPaxGender(opt.value)}
+                            className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer whitespace-nowrap ${
+                              newPaxGender === opt.value
+                                ? 'bg-white text-[#07244d] shadow-2xs ring-1 ring-slate-200'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="sm:col-span-6">
+                      <span className="block font-semibold text-slate-700 mb-1.5">Quốc tịch / Phân loại</span>
+                      <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setNewPaxIsForeigner(false)}
+                          className={`py-2 px-2 text-xs font-bold rounded-lg transition cursor-pointer whitespace-nowrap ${
+                            !newPaxIsForeigner
+                              ? 'bg-white text-[#07244d] shadow-2xs ring-1 ring-slate-200'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Việt Nam
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewPaxIsForeigner(true)}
+                          className={`py-2 px-2 text-xs font-bold rounded-lg transition cursor-pointer whitespace-nowrap ${
+                            newPaxIsForeigner
+                              ? 'bg-white text-purple-800 shadow-2xs ring-1 ring-purple-200'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Nước ngoài
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Nhóm 2: Giấy tờ & Liên hệ */}
+                <div className="space-y-3.5">
+                  <div className="border-b border-slate-100 pb-2">
+                    <h4 className="text-xs font-bold text-[#07244d]">2. Giấy tờ tùy thân &amp; Liên hệ</h4>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div>
+                      <label htmlFor="pax-id-number" className="block font-semibold text-slate-700 mb-1.5">
+                        {newPaxIsForeigner ? 'Số Hộ chiếu' : 'Số CCCD / CMND'}
+                      </label>
+                      <input
+                        id="pax-id-number"
+                        type="text"
+                        value={newPaxIdNumber}
+                        onChange={(e) => setNewPaxIdNumber(e.target.value)}
+                        placeholder={newPaxIsForeigner ? 'VD: C12345678' : 'VD: 051085001234'}
+                        className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums text-slate-900 border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition"
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="pax-phone" className="block font-semibold text-slate-700 mb-1.5">
+                        Số điện thoại liên hệ
+                      </label>
+                      <input
+                        id="pax-phone"
+                        type="tel"
+                        value={newPaxPhone}
+                        onChange={(e) => setNewPaxPhone(e.target.value)}
+                        placeholder="VD: 0988123456"
+                        className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums text-slate-900 border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Nhóm 3: Địa chỉ & Ghi chú */}
+                <div className="space-y-3.5">
+                  <div className="border-b border-slate-100 pb-2">
+                    <h4 className="text-xs font-bold text-[#07244d]">3. Địa chỉ lưu trú &amp; Ghi chú</h4>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5">
+                    <div className="sm:col-span-7">
+                      <label htmlFor="pax-address" className="block font-semibold text-slate-700 mb-1.5">
+                        Địa chỉ thường trú / Lưu trú
+                      </label>
+                      <input
+                        id="pax-address"
+                        type="text"
+                        value={newPaxAddress}
+                        onChange={(e) => setNewPaxAddress(e.target.value)}
+                        placeholder="VD: Thôn Tây, Lý Sơn, Quảng Ngãi"
+                        className="w-full px-3.5 py-2.5 text-sm text-slate-900 border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-5">
+                      <label htmlFor="pax-notes" className="block font-semibold text-slate-700 mb-1.5">
+                        Ghi chú (tùy chọn)
+                      </label>
+                      <input
+                        id="pax-notes"
+                        type="text"
+                        value={newPaxNotes}
+                        onChange={(e) => setNewPaxNotes(e.target.value)}
+                        placeholder="VD: Khách du lịch, đi cùng trẻ em..."
+                        className="w-full px-3.5 py-2.5 text-sm text-slate-900 border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Theo dõi nhanh các hành khách vừa thêm trong phiên nhập hiện tại */}
+                {sessionAddedPax.length > 0 && (
+                  <div className="pt-3 border-t border-slate-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-emerald-700 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        Đã thêm trong phiên này ({sessionAddedPax.length})
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Tiếp tục nhập người tiếp theo hoặc bấm Đóng khi hoàn tất
+                      </span>
+                    </div>
+                    <div className="max-h-28 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
+                      {sessionAddedPax.map((added, i) => (
+                        <div
+                          key={added.id}
+                          className={`px-3 py-1.5 flex items-center justify-between gap-2 text-xs ${
+                            i % 2 === 0 ? 'bg-white' : 'bg-[#f1f6fd]/60'
+                          }`}
+                        >
+                          <div className="min-w-0 truncate">
+                            <span className="font-bold text-slate-900">{added.fullName}</span>
+                            <span className="text-slate-500 ml-2 tabular-nums">
+                              · {added.birthYear} · {added.gender === 'NAM' ? 'Nam' : added.gender === 'NU' ? 'Nữ' : 'Khác'} · {added.idNumber}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemovePassenger(added.id)}
+                            className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer shrink-0"
+                            title="Bỏ hành khách này"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer modal */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+                <div className="text-xs text-slate-600 tabular-nums">
+                  {selectedVessel ? (
+                    passengers.length < selectedVessel.maxPassengers ? (
+                      <span>
+                        Còn trống{' '}
+                        <strong className="text-emerald-700">
+                          {selectedVessel.maxPassengers - passengers.length} chỗ
+                        </strong>{' '}
+                        trên tàu {selectedVessel.name}
+                      </span>
+                    ) : (
+                      <span className="font-semibold text-amber-700">
+                        Đã đủ/vượt sức chở tàu ({passengers.length}/{selectedVessel.maxPassengers} khách)
+                      </span>
+                    )
+                  ) : (
+                    <span>Chưa chọn phương tiện</span>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={closeAddPassengerModal}
+                    className="px-4 py-2.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-xl transition cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Đóng
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddPassenger(true)}
+                    className="px-4 py-2.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Lưu &amp; thêm tiếp</span>
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>Lưu hành khách</span>
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
         </div>
       )}

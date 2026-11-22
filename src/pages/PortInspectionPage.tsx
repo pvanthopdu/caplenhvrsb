@@ -14,7 +14,7 @@ import {
 } from '../types';
 import { repository } from '../services/repository';
 import { getUserAssignedPortId } from '../utils/userPermissions';
-import { formatDateTime, getStatusInfo } from '../utils/formatters';
+import { formatDateTime, getStatusInfo, getReturnScopeLabel } from '../utils/formatters';
 import { OfficialFormsModal } from '../components/OfficialFormsModal';
 import { CoastalPageHero } from '../components/CoastalPageHero';
 import { SearchableSelect } from '../components/SearchableSelect';
@@ -173,9 +173,16 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
   const adminConfig = repository.getAdminConfig();
   const userPortId = getUserAssignedPortId(currentUser);
 
-  const inspectableTrips = trips.filter((t) =>
-    ['CHO_KIEM_TRA', 'TRA_BQL_CANG'].includes(normalizeStatus(t.status))
-  );
+  const inspectableTrips = trips
+    .filter((t) => ['CHO_KIEM_TRA', 'TRA_BQL_CANG'].includes(normalizeStatus(t.status)))
+    .sort((a, b) => {
+      const aOwn = !userPortId || a.departurePortId === userPortId ? 0 : 1;
+      const bOwn = !userPortId || b.departurePortId === userPortId ? 0 : 1;
+      if (aOwn !== bOwn) return aOwn - bOwn;
+      const aRet = normalizeStatus(a.status) === 'TRA_BQL_CANG' ? 0 : 1;
+      const bRet = normalizeStatus(b.status) === 'TRA_BQL_CANG' ? 0 : 1;
+      return aRet - bRet;
+    });
   const arrivingTrips = trips.filter(
     (t) =>
       normalizeStatus(t.status) === 'DA_XUAT_BEN' &&
@@ -233,17 +240,16 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
   const [certInsNote, setCertInsNote] = useState<string>('');
   const [certDetailTab, setCertDetailTab] = useState<CertDetailTab | null>(null);
 
-  // Mục II: 8 nhóm kiểm tra BQL Cảng theo cấu hình Admin + Xác minh nộp phí
-  const [checklistItems, setChecklistItems] = useState<BqlChecklistItemResult[]>(() =>
-    adminConfig.bqlChecklistConfig.map((cfg) => ({
-      itemId: cfg.id,
-      groupCode: cfg.groupCode,
-      groupTitle: cfg.groupTitle,
-      label: cfg.label,
-      status: 'DAT' as ChecklistItemStatus,
-      note: '',
-    }))
-  );
+  // Mục II: Công tác kiểm tra điều kiện an toàn của phương tiện theo quy định (Phụ lục 01)
+  const [checkCrewRosterMatch, setCheckCrewRosterMatch] = useState<boolean>(true);
+  const [checkTechSafetyAndEnv, setCheckTechSafetyAndEnv] = useState<boolean>(true);
+  const [noteTechSafetyAndEnv, setNoteTechSafetyAndEnv] = useState<string>('');
+  const [checkCertsAndCrewQual, setCheckCertsAndCrewQual] = useState<boolean>(true);
+  const [noteCertsAndCrewQual, setNoteCertsAndCrewQual] = useState<string>('');
+  const [checkFireAndPollution, setCheckFireAndPollution] = useState<boolean>(true);
+  const [noteFireAndPollution, setNoteFireAndPollution] = useState<string>('');
+  const [checkOverloadAndPassengers, setCheckOverloadAndPassengers] = useState<boolean>(true);
+  const [noteOverloadAndPassengers, setNoteOverloadAndPassengers] = useState<string>('');
   const [feeVerified, setFeeVerified] = useState<boolean>(true);
   const [feeVerifyNote, setFeeVerifyNote] = useState<string>('');
 
@@ -270,7 +276,7 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
 
   // Modal Trả Chủ tàu
   const [showReturnCaptainModal, setShowReturnCaptainModal] = useState<boolean>(false);
-  const [returnScope, setReturnScope] = useState<ReturnScope>('BO_SUNG_THONG_TIN');
+  const [returnScope, setReturnScope] = useState<ReturnScope>('bo_sung_chung_tu');
   const [returnReasonText, setReturnReasonText] = useState<string>('');
 
   // Modal Không chấp thuận (Đóng hồ sơ)
@@ -352,20 +358,18 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
     setCertInsExpireDate(insExpire);
     setCertInsNote(pi?.certInsuranceNote || '');
 
-    if (pi?.checklistItems && pi.checklistItems.length > 0) {
-      setChecklistItems(pi.checklistItems);
-    } else {
-      setChecklistItems(
-        adminConfig.bqlChecklistConfig.map((cfg) => ({
-          itemId: cfg.id,
-          groupCode: cfg.groupCode,
-          groupTitle: cfg.groupTitle,
-          label: cfg.label,
-          status: 'DAT' as ChecklistItemStatus,
-          note: '',
-        }))
-      );
-    }
+    setCheckCrewRosterMatch(pi?.checkCrewRosterMatch ?? true);
+    setCheckTechSafetyAndEnv(pi?.checkTechSafetyAndEnv ?? pi?.checkVesselDocuments ?? true);
+    setNoteTechSafetyAndEnv(pi?.noteTechSafetyAndEnv || '');
+    setCheckCertsAndCrewQual(pi?.checkCertsAndCrewQual ?? pi?.checkCrewCertificates ?? true);
+    setNoteCertsAndCrewQual(pi?.noteCertsAndCrewQual || '');
+    setCheckFireAndPollution(pi?.checkFireAndPollution ?? pi?.checkFireSafety ?? true);
+    setNoteFireAndPollution(pi?.noteFireAndPollution || '');
+    setCheckOverloadAndPassengers(
+      pi?.checkOverloadAndPassengers ?? ((pi?.checkCargoSafety ?? true) && (pi?.checkActualPassengers ?? true))
+    );
+    setNoteOverloadAndPassengers(pi?.noteOverloadAndPassengers || '');
+
     const hasFeeDoc =
       Boolean(selectedTrip.feeTransactionCode?.trim()) ||
       Boolean(selectedTrip.uploadedDocuments?.some((d) => d.category === 'FEE_RECEIPT'));
@@ -418,18 +422,44 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
     );
   }
 
-  const getChecklistStatus = (groupCode: string): boolean => {
-    const found = checklistItems.find((i) => i.groupCode === groupCode || i.itemId === groupCode);
-    return found ? found.status !== 'KHONG_DAT' : true;
+  const buildSynthesizedChecklist = (): BqlChecklistItemResult[] => {
+    const mapByGroup = (groupCode: string): { ok: boolean; note: string } => {
+      switch (groupCode) {
+        case 'NHOM_1':
+          return { ok: checkCertsAndCrewQual, note: noteCertsAndCrewQual };
+        case 'NHOM_2':
+          return { ok: checkCrewRosterMatch && checkCertsAndCrewQual, note: noteCertsAndCrewQual };
+        case 'NHOM_3':
+          return { ok: checkOverloadAndPassengers, note: noteOverloadAndPassengers };
+        case 'NHOM_4':
+          return { ok: checkOverloadAndPassengers, note: noteOverloadAndPassengers };
+        case 'NHOM_5':
+          return { ok: checkTechSafetyAndEnv, note: noteTechSafetyAndEnv };
+        case 'NHOM_6':
+          return { ok: checkFireAndPollution, note: noteFireAndPollution };
+        case 'NHOM_7':
+          return { ok: checkTechSafetyAndEnv && checkBerthPositionSafe, note: noteTechSafetyAndEnv };
+        case 'NHOM_8':
+          return { ok: feeVerified, note: feeVerifyNote };
+        default:
+          return { ok: checkTechSafetyAndEnv, note: '' };
+      }
+    };
+
+    return adminConfig.bqlChecklistConfig.map((cfg) => {
+      const mapped = mapByGroup(cfg.groupCode);
+      return {
+        itemId: cfg.id,
+        groupCode: cfg.groupCode,
+        groupTitle: cfg.groupTitle,
+        label: cfg.label,
+        status: (mapped.ok ? 'DAT' : 'KHONG_DAT') as ChecklistItemStatus,
+        note: mapped.note,
+      };
+    });
   };
 
   const buildInspectionPayload = (conclusion: 'ELIGIBLE' | 'INELIGIBLE'): PortInspectionAppendix01 => {
-    const checkRegAndTech = getChecklistStatus('G1') && getChecklistStatus('G2');
-    const checkCrewQual = getChecklistStatus('G3');
-    const checkFireSafe = getChecklistStatus('G6');
-    const checkPaxCargo = getChecklistStatus('G4') && getChecklistStatus('G5');
-    const checkEnvFee = getChecklistStatus('G7') && getChecklistStatus('G8');
-
     return {
       inspectorId: currentUser.id,
       inspectorName: currentUser.fullName,
@@ -447,30 +477,30 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
       certInsuranceIssueDate: certInsIssueDate,
       certInsuranceExpireDate: certInsExpireDate,
       certInsuranceNote: certInsNote,
-      checklistItems,
+      checklistItems: buildSynthesizedChecklist(),
       feeVerified,
       feeVerifyNote,
-      checkCrewRosterMatch: checkCrewQual,
-      checkTechSafetyAndEnv: checkRegAndTech,
-      noteTechSafetyAndEnv: checklistItems.find((i) => i.groupCode === 'G2')?.note || '',
-      checkCertsAndCrewQual: checkCrewQual,
-      noteCertsAndCrewQual: checklistItems.find((i) => i.groupCode === 'G3')?.note || '',
-      checkFireAndPollution: checkFireSafe && checkEnvFee,
-      noteFireAndPollution: checklistItems.find((i) => i.groupCode === 'G6')?.note || '',
-      checkOverloadAndPassengers: checkPaxCargo,
-      noteOverloadAndPassengers: checklistItems.find((i) => i.groupCode === 'G4')?.note || '',
+      checkCrewRosterMatch,
+      checkTechSafetyAndEnv,
+      noteTechSafetyAndEnv,
+      checkCertsAndCrewQual,
+      noteCertsAndCrewQual,
+      checkFireAndPollution,
+      noteFireAndPollution,
+      checkOverloadAndPassengers,
+      noteOverloadAndPassengers,
       checkBerthPositionSafe,
       crewOrDocChanged,
       crewOrDocChangedDetails: crewOrDocChanged ? crewOrDocChangedDetails : undefined,
-      checkVesselDocuments: checkRegAndTech,
-      checkCrewCertificates: checkCrewQual,
-      checkActualPassengers: checkPaxCargo,
+      checkVesselDocuments: checkTechSafetyAndEnv && checkCertsAndCrewQual,
+      checkCrewCertificates: checkCrewRosterMatch && checkCertsAndCrewQual,
+      checkActualPassengers: checkOverloadAndPassengers,
       actualPassengerCount: actualPaxCount,
-      checkCargoSafety: checkPaxCargo,
+      checkCargoSafety: checkOverloadAndPassengers,
       actualCargoTons,
-      checkLifeSavingEquip: checkFireSafe,
+      checkLifeSavingEquip: checkTechSafetyAndEnv,
       actualLifeJackets,
-      checkFireSafety: checkFireSafe,
+      checkFireSafety: checkFireAndPollution,
       checkWeatherCondition: checkBerthPositionSafe,
       currentWindForce: windForce,
       currentWaveHeight: waveHeight,
@@ -482,8 +512,14 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
     };
   };
 
-  const hasChecklistFailure = checklistItems.some((item) => item.status === 'KHONG_DAT');
-  const hasAnyFailure = hasChecklistFailure || !checkBerthPositionSafe || !feeVerified;
+  const hasSafetyFailure =
+    !checkCrewRosterMatch ||
+    !checkTechSafetyAndEnv ||
+    !checkCertsAndCrewQual ||
+    !checkFireAndPollution ||
+    !checkOverloadAndPassengers ||
+    !checkBerthPositionSafe;
+  const hasAnyFailure = hasSafetyFailure || !feeVerified;
   const isActionableStatus = canonicalStatus === 'CHO_KIEM_TRA' || canonicalStatus === 'TRA_BQL_CANG';
 
   // Kết luận kiểm tra tại bến: Cấp Thông báo chấp thuận & Chuyển Sở HOẶC Không chấp thuận (Đóng hồ sơ)
@@ -502,8 +538,8 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
       setPermissionNotice('Vui lòng kiểm tra và xác nhận chứng từ nộp phí rời cảng trước khi cấp Thông báo chấp thuận.');
       return;
     }
-    if (conclusion === 'ELIGIBLE' && hasChecklistFailure) {
-      setPermissionNotice('Còn mục kiểm tra đánh giá "Không đạt". Nếu thiếu/sai, hãy dùng "Trả Chủ tàu" hoặc "Không chấp thuận".');
+    if (conclusion === 'ELIGIBLE' && hasSafetyFailure) {
+      setPermissionNotice('Còn nội dung kiểm tra tại Mục II hoặc Mục III đánh giá "Không đạt". Nếu cần bổ sung, hãy dùng "Trả Chủ tàu" hoặc "Không chấp thuận".');
       return;
     }
 
@@ -533,6 +569,27 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
     onNavigate('dashboard');
   };
 
+  // Mở modal trả Chủ tàu (tự gợi ý lý do từ các mục chưa đạt nếu chưa nhập)
+  const openReturnCaptainModal = () => {
+    setPermissionNotice(null);
+    if (!returnReasonText.trim()) {
+      const reasons: string[] = [];
+      if (!feeVerified) reasons.push('Thiếu hoặc chưa khớp biên lai/mã giao dịch nộp phí rời cảng (R11)');
+      if (!checkCrewRosterMatch) reasons.push('Danh sách thuyền viên khai báo chưa khớp danh bạ/thực tế');
+      if (!checkCertsAndCrewQual) reasons.push('Giấy tờ tàu hoặc chứng chỉ chuyên môn thuyền viên chưa hợp lệ');
+      if (!checkOverloadAndPassengers) reasons.push('Số lượng hành khách/hàng hóa không khớp hoặc vượt định mức');
+      if (!checkTechSafetyAndEnv) reasons.push('Điều kiện an toàn kỹ thuật và trang bị cứu sinh chưa đạt');
+      if (!checkFireAndPollution) reasons.push('Trang bị PCCC / phòng ngừa ô nhiễm môi trường chưa đảm bảo');
+      if (reasons.length > 0) {
+        setReturnReasonText(reasons.join('; '));
+      }
+      if (!feeVerified) setReturnScope('bo_sung_chung_tu');
+      else if (!checkCrewRosterMatch || !checkCertsAndCrewQual) setReturnScope('sua_thuyen_vien');
+      else if (!checkOverloadAndPassengers) setReturnScope('sua_hanh_khach');
+    }
+    setShowReturnCaptainModal(true);
+  };
+
   // Trả hồ sơ về Chủ tàu để sửa / bổ sung
   const handleReturnToCaptain = () => {
     setPermissionNotice(null);
@@ -552,7 +609,7 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
     }
     setShowReturnCaptainModal(false);
     setReturnReasonText('');
-    const msg = `Đã trả hồ sơ ${selectedTrip.tripNumber} về Chủ tàu/Thuyền trưởng (${returnScope}): "${returnReasonText.trim()}".`;
+    const msg = `Đã trả hồ sơ ${selectedTrip.tripNumber} về tài khoản Chủ tàu (${selectedTrip.captainName} — ${getReturnScopeLabel(returnScope)}): "${returnReasonText.trim()}".`;
     sessionStorage.setItem('vrsb_workflow_completed_msg', msg);
     onNavigate('dashboard');
   };
@@ -560,7 +617,7 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
   // Gửi lại Sở Xây dựng sau khi xử lý TRA_BQL_CANG
   const handleResubmitToDept = () => {
     setPermissionNotice(null);
-    if (hasChecklistFailure || !feeVerified) {
+    if (hasSafetyFailure || !feeVerified) {
       setPermissionNotice('Vui lòng đảm bảo các mục kiểm tra đạt yêu cầu trước khi gửi lại Sở Xây dựng.');
       return;
     }
@@ -603,13 +660,13 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
     <div className="w-full mx-auto space-y-5 transition-all duration-300">
       {/* Tiêu đề & Bộ chọn hồ sơ */}
       <CoastalPageHero
-        title="Ban Quản lý Cảng: Kiểm tra 8 nhóm & Cấp Thông báo chấp thuận"
-        subtitle="Kiểm tra 8 nhóm điều kiện rời bến + chứng từ nộp phí; cấp Thông báo chấp thuận chuyển trực tiếp Sở Xây dựng trong ứng dụng."
+        title="Kiểm tra thực tế tại bến (Phụ lục 01) & Cấp Thông báo chấp thuận"
+        subtitle="Ban Quản lý Cảng tỉnh Quảng Ngãi đối chiếu hồ sơ giấy tờ, kiểm tra điều kiện an toàn phương tiện tại bến và cấp Thông báo chấp thuận chuyển Sở Xây dựng."
         icon={<ClipboardCheck className="w-7 h-7" />}
         badge={
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full bg-[#f4cf47] text-[#072b61] text-[10px] font-black uppercase">
-              Khâu BQL Cảng • Định mức 60 phút
+              Phụ lục 01 • Định mức 60 phút
             </span>
             <span className="text-[11px] text-blue-100 font-semibold">
               {currentUser.department || 'Ban Quản lý Cảng tỉnh Quảng Ngãi'}
@@ -786,11 +843,20 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
           <RotateCcw className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
           <div className="space-y-1">
             <p className="font-black uppercase text-amber-900">
-              Sở Xây dựng trả hồ sơ về Ban Quản lý Cảng để bổ sung
+              Phòng ATGT (Sở Xây dựng) xác định sai sót thuộc BQL Cảng — Trả hồ sơ về rà soát lại
             </p>
+            {selectedTrip.lastReturnInfo.phamVi && (
+              <p className="text-[11px] font-bold text-amber-800">
+                Nhóm sai sót: {getReturnScopeLabel(selectedTrip.lastReturnInfo.phamVi)}
+              </p>
+            )}
             <p>
-              Lý do: <strong>{selectedTrip.lastReturnInfo.lyDo}</strong> • Cán bộ trả:{' '}
-              {selectedTrip.lastReturnInfo.nguoiTraTen} ({formatDateTime(selectedTrip.lastReturnInfo.thoiDiem)})
+              Lý do: <strong>{selectedTrip.lastReturnInfo.lyDo}</strong> • Chuyên viên trả:{' '}
+              {selectedTrip.lastReturnInfo.nguoiTraTen || selectedTrip.lastReturnInfo.traBoiName} (
+              {formatDateTime(selectedTrip.lastReturnInfo.thoiDiem)})
+            </p>
+            <p className="text-[11px] text-amber-800">
+              Sau khi cập nhật kết quả kiểm tra tại bến (Phụ lục 01), nhấn <strong>"Gửi lại Sở Xây dựng →"</strong> để chuyển lại hồ sơ (hoặc chọn <strong>"Trả Chủ tàu bổ sung"</strong> nếu cần Chủ tàu điều chỉnh hồ sơ gốc).
             </p>
           </div>
         </div>
@@ -1040,87 +1106,141 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
           );
         })()}
 
-        {/* MỤC II: CHECKLIST 8 NHÓM KIỂM TRA BQL CẢNG & ĐỐI CHIẾU PHÍ RỜI CẢNG */}
-        <div className="space-y-4">
+        {/* MỤC II: CÔNG TÁC KIỂM TRA ĐIỀU KIỆN AN TOÀN CỦA PHƯƠNG TIỆN THEO QUY ĐỊNH (PHỤ LỤC 01) */}
+        <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-black text-xs uppercase tracking-wider text-slate-800">
-              II. Bảng kiểm 8 nhóm điều kiện an toàn tại bến &amp; Xác minh nộp phí
+              II. Công tác kiểm tra điều kiện an toàn của phương tiện theo quy định
             </h2>
-            <div className="flex items-center gap-2">
+            <span className="text-[11px] text-slate-500 italic">
+              Đánh dấu [X] vào kết quả đối chiếu, kiểm tra
+            </span>
+          </div>
+
+          {/* Dòng đối chiếu danh sách thuyền viên */}
+          <div
+            className={`p-3.5 rounded-xl border flex flex-col lg:flex-row lg:items-center justify-between gap-3 ${
+              !checkCrewRosterMatch ? 'bg-red-50/70 border-red-300' : 'bg-blue-50/60 border-blue-200'
+            }`}
+          >
+            <div>
+              <p className="font-bold text-slate-900">
+                Đối chiếu danh sách thuyền viên với danh bạ thuyền viên
+              </p>
+              <p className="text-[11px] text-slate-600">
+                Kiểm tra thực tế thuyền trưởng, máy trưởng, thủy thủ trên tàu khớp danh sách khai báo và danh bạ thuyền viên
+              </p>
+            </div>
+            <div className="flex gap-1.5 shrink-0">
               <button
                 type="button"
-                onClick={() =>
-                  setChecklistItems((prev) => prev.map((it) => ({ ...it, status: 'DAT' })))
-                }
-                className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-bold cursor-pointer"
+                onClick={() => setCheckCrewRosterMatch(true)}
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition ${
+                  checkCrewRosterMatch ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                }`}
               >
-                Đánh dấu Đạt tất cả (8 nhóm)
+                [X] Đạt
+              </button>
+              <button
+                type="button"
+                onClick={() => setCheckCrewRosterMatch(false)}
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition ${
+                  !checkCrewRosterMatch ? 'bg-red-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                }`}
+              >
+                [X] Không đạt
               </button>
             </div>
           </div>
 
+          {/* 4 nội dung kiểm tra điều kiện an toàn theo Phụ lục 01 */}
           <div className="space-y-2.5">
-            {checklistItems.map((item, idx) => (
+            {(
+              [
+                {
+                  num: 1,
+                  label: 'Các điều kiện an toàn kỹ thuật và bảo vệ môi trường của tàu thuyền theo quy định',
+                  checked: checkTechSafetyAndEnv,
+                  setChecked: setCheckTechSafetyAndEnv,
+                  note: noteTechSafetyAndEnv,
+                  setNote: setNoteTechSafetyAndEnv,
+                },
+                {
+                  num: 2,
+                  label:
+                    'Giấy chứng nhận đăng ký, giấy chứng nhận an toàn kỹ thuật và bảo vệ môi trường, giấy chứng nhận khả năng chuyên môn, chứng chỉ chuyên môn thuyền viên, người lái phương tiện thủy nội địa của tàu thuyền, thuyền viên, người lái phương tiện.',
+                  checked: checkCertsAndCrewQual,
+                  setChecked: setCheckCertsAndCrewQual,
+                  note: noteCertsAndCrewQual,
+                  setNote: setNoteCertsAndCrewQual,
+                },
+                {
+                  num: 3,
+                  label: 'Việc thực hiện các quy định về phòng, chống cháy, nổ, phòng ngừa ô nhiễm môi trường',
+                  checked: checkFireAndPollution,
+                  setChecked: setCheckFireAndPollution,
+                  note: noteFireAndPollution,
+                  setNote: setNoteFireAndPollution,
+                },
+                {
+                  num: 4,
+                  label:
+                    'Việc thực hiện chở hàng hóa độc hại, nguy hiểm, hàng hóa vượt quá tải trọng cho phép; việc hành khách lên tàu thuyền quá số lượng theo quy định',
+                  checked: checkOverloadAndPassengers,
+                  setChecked: setCheckOverloadAndPassengers,
+                  note: noteOverloadAndPassengers,
+                  setNote: setNoteOverloadAndPassengers,
+                },
+              ] as const
+            ).map((row) => (
               <div
-                key={item.itemId}
+                key={row.num}
                 className={`p-3.5 rounded-xl border flex flex-col lg:flex-row lg:items-center justify-between gap-3 ${
-                  item.status === 'KHONG_DAT'
-                    ? 'bg-rose-50/70 border-rose-300'
-                    : item.status === 'KHONG_AP_DUNG'
-                    ? 'bg-slate-100/80 border-slate-300'
-                    : 'bg-slate-50 border-slate-200'
+                  !row.checked ? 'bg-red-50/70 border-red-300' : 'bg-slate-50 border-slate-200'
                 }`}
               >
                 <div className="flex-1 space-y-1.5">
-                  <p className="font-bold text-slate-900">
-                    {idx + 1}. {item.label}{' '}
-                    <span className="text-[10px] font-mono text-slate-400">({item.groupCode})</span>
+                  <p className="font-bold text-slate-900 leading-relaxed">
+                    {row.num}. {row.label}
                   </p>
                   <input
                     type="text"
-                    value={item.note || ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setChecklistItems((prev) =>
-                        prev.map((it) => (it.itemId === item.itemId ? { ...it, note: val } : it))
-                      );
-                    }}
-                    placeholder="Ghi chú kiểm tra mục này (bắt buộc nếu Không đạt)..."
+                    value={row.note}
+                    onChange={(e) => row.setNote(e.target.value)}
+                    placeholder="Ghi chú kiểm tra mục này (nếu có)..."
                     className="w-full sm:max-w-lg p-1.5 border border-slate-300 rounded-lg bg-white text-[11px]"
                   />
                 </div>
-                <div className="flex flex-wrap gap-1.5 shrink-0">
-                  {([
-                    { key: 'DAT' as ChecklistItemStatus, label: 'Đạt', activeCls: 'bg-emerald-600 text-white' },
-                    { key: 'KHONG_DAT' as ChecklistItemStatus, label: 'Không đạt', activeCls: 'bg-rose-600 text-white' },
-                    { key: 'KHONG_AP_DUNG' as ChecklistItemStatus, label: 'Không áp dụng', activeCls: 'bg-slate-600 text-white' },
-                  ]).map((opt) => (
-                    <button
-                      key={opt.key}
-                      type="button"
-                      onClick={() =>
-                        setChecklistItems((prev) =>
-                          prev.map((it) => (it.itemId === item.itemId ? { ...it, status: opt.key } : it))
-                        )
-                      }
-                      className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition ${
-                        item.status === opt.key ? opt.activeCls : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+                <div className="flex gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => row.setChecked(true)}
+                    className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition ${
+                      row.checked ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                    }`}
+                  >
+                    [X] Đạt
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => row.setChecked(false)}
+                    className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition ${
+                      !row.checked ? 'bg-red-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                    }`}
+                  >
+                    [X] Không đạt
+                  </button>
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Xác minh chứng từ nộp phí rời cảng */}
-          <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/60 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          {/* Đối chiếu chứng từ nộp phí, lệ phí rời cảng/bến (R11) */}
+          <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/50 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="space-y-1 flex-1">
-              <p className="font-black text-blue-950 flex items-center gap-1.5">
+              <p className="font-bold text-blue-950 flex items-center gap-1.5">
                 <Receipt className="w-4 h-4 text-blue-700" />
-                Xác minh nộp phí, lệ phí rời cảng/bến (Quy tắc R11)
+                Đối chiếu biên lai / mã giao dịch nộp phí, lệ phí rời cảng, bến (R11)
               </p>
               <p className="text-[11px] text-slate-700">
                 Biên lai đính kèm:{' '}
@@ -1142,24 +1262,24 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
                 className="w-full sm:max-w-lg p-1.5 border border-blue-200 rounded-lg bg-white text-[11px]"
               />
             </div>
-            <div className="flex gap-2 shrink-0">
+            <div className="flex gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => setFeeVerified(true)}
-                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer ${
-                  feeVerified ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-700'
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition ${
+                  feeVerified ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
                 }`}
               >
-                ✓ Đã nộp đủ phí
+                [X] Đã nộp đủ phí
               </button>
               <button
                 type="button"
                 onClick={() => setFeeVerified(false)}
-                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer ${
-                  !feeVerified ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer transition ${
+                  !feeVerified ? 'bg-red-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
                 }`}
               >
-                ✕ Thiếu / Sai phí
+                [X] Thiếu / Sai phí
               </button>
             </div>
           </div>
@@ -1489,7 +1609,7 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
             <button
               type="button"
               disabled={!canConclude || !isActionableStatus}
-              onClick={() => setShowReturnCaptainModal(true)}
+              onClick={openReturnCaptainModal}
               className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl font-bold flex items-center gap-1.5 transition cursor-pointer shadow-xs"
             >
               <RotateCcw className="w-4 h-4" />
@@ -1534,24 +1654,52 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
       {/* Modal Trả Chủ tàu sửa/bổ sung */}
       {showReturnCaptainModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-amber-200 space-y-4 text-xs">
-            <h3 className="text-sm font-black text-amber-950 uppercase">
-              Trả hồ sơ về Chủ tàu sửa / bổ sung
-            </h3>
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl border border-amber-200 space-y-4 text-xs">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-black text-amber-950 uppercase">
+                  Trả hồ sơ về tài khoản Chủ tàu bổ sung / chỉnh sửa
+                </h3>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  Người nhận: <strong>{selectedTrip.captainName}</strong> • Tàu{' '}
+                  <strong>
+                    {selectedTrip.vesselName} ({selectedTrip.vesselRegNumber})
+                  </strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowReturnCaptainModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-950 space-y-1">
+              <p className="font-bold">Luồng xử lý sau khi trả:</p>
+              <p>
+                Hồ sơ chuyển sang trạng thái <strong>Trả Chủ tàu bổ sung (TRA_CHU_TAU)</strong> và đồng hồ BQL Cảng tạm dừng. Sau khi Chủ tàu chỉnh sửa &amp; nộp lại, hồ sơ sẽ quay lại hàng chờ{' '}
+                <strong>Ban Quản lý Cảng ({selectedTrip.departurePortName})</strong>.
+              </p>
+            </div>
+
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Phạm vi yêu cầu chỉnh sửa:</label>
+              <label className="block font-bold text-slate-700 mb-1">Phạm vi yêu cầu Chủ tàu chỉnh sửa:</label>
               <select
                 value={returnScope}
                 onChange={(e) => setReturnScope(e.target.value as ReturnScope)}
                 className="w-full p-2.5 border border-slate-300 rounded-xl bg-white font-semibold"
               >
-                <option value="BO_SUNG_THONG_TIN">Bổ sung thông tin / chứng từ chung</option>
-                <option value="SUA_DANH_SACH_NGUOI">Sửa danh sách hành khách / số người</option>
-                <option value="THAY_DOI_THUYEN_VIEN_CHO">Thay đổi thuyền viên / chứng chỉ / sức chở</option>
+                <option value="bo_sung_chung_tu">Bổ sung chứng từ đính kèm / biên lai phí / thông tin</option>
+                <option value="sua_thong_tin_chung">Sửa thông tin chuyến / giờ chạy / hàng hóa</option>
+                <option value="sua_thuyen_vien">Sửa danh sách thuyền viên &amp; chứng chỉ chuyên môn</option>
+                <option value="sua_hanh_khach">Sửa danh sách hành khách / số lượng người</option>
+                <option value="sua_toan_bo">Chỉnh sửa toàn bộ hồ sơ</option>
               </select>
             </div>
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Lý do trả hồ sơ (*):</label>
+              <label className="block font-bold text-slate-700 mb-1">Lý do trả hồ sơ &amp; yêu cầu khắc phục (*):</label>
               <textarea
                 rows={3}
                 value={returnReasonText}

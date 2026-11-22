@@ -3,17 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   AlertTriangle,
-  KeyRound,
   Loader2,
   QrCode,
-  ShieldCheck,
 } from 'lucide-react';
 import { UserAccount } from '../types';
 import { signInWithGmailPopup } from '../services/firebaseAuthService';
-import { repository } from '../services/repository';
 
 interface LoginPageProps {
   onOpenPublicVerify?: () => void;
@@ -24,22 +21,11 @@ interface LoginPageProps {
 
 export const LoginPage: React.FC<LoginPageProps> = ({
   onOpenPublicVerify,
-  onBpLoginSuccess,
   externalError,
   onClearExternalError,
 }) => {
   const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-
-  // Biên phòng 2FA state
-  const [showBpLogin, setShowBpLogin] = useState(false);
-  const [bpUsername, setBpUsername] = useState('bp_truc1');
-  const [bpPassword, setBpPassword] = useState('bp123456');
-  const [bpPendingUser, setBpPendingUser] = useState<UserAccount | null>(null);
-  const [generatedOtp, setGeneratedOtp] = useState('');
-  const [otpInput, setOtpInput] = useState('');
-
-  const bpConfig = useMemo(() => repository.getBpConfig(), []);
 
   const handleGoogleSignIn = async () => {
     setIsSigningInGoogle(true);
@@ -63,37 +49,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     } finally {
       setIsSigningInGoogle(false);
     }
-  };
-
-  const startBpOtpFlow = (usernameInput: string, passwordInput: string) => {
-    setErrorMessage('');
-    onClearExternalError?.();
-    const res = repository.authenticateBpCredentials(usernameInput, passwordInput);
-    if (!res.success || !res.user) {
-      setErrorMessage(res.error || 'Đăng nhập Biên phòng thất bại.');
-      return;
-    }
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
-    setBpPendingUser(res.user);
-    setGeneratedOtp(otp);
-    setOtpInput(otp);
-  };
-
-  const handleBpCredentialsSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    startBpOtpFlow(bpUsername, bpPassword);
-  };
-
-  const handleBpOtpVerify = (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage('');
-    if (!bpPendingUser) return;
-    if (otpInput.trim() !== generatedOtp) {
-      setErrorMessage('Mã OTP xác thực 2 lớp không khớp. Vui lòng kiểm tra lại.');
-      return;
-    }
-    repository.createBpDemoSession(bpPendingUser);
-    onBpLoginSuccess?.(bpPendingUser);
   };
 
   const displayError = errorMessage || externalError;
@@ -310,130 +265,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </>
               )}
             </button>
-
-            {/* Nút mở đăng nhập Biên phòng 2FA */}
-            <button
-              type="button"
-              onClick={() => {
-                setShowBpLogin((v) => !v);
-                setErrorMessage('');
-              }}
-              className="w-full min-h-[46px] py-2.5 px-5 bg-[#0f294a] hover:bg-[#0a1d36] text-white font-bold text-xs sm:text-sm rounded-xl sm:rounded-2xl transition flex items-center justify-center gap-2.5 cursor-pointer"
-            >
-              <ShieldCheck className="w-4.5 h-4.5 text-sky-300 shrink-0" />
-              <span>Đăng nhập {bpConfig.unitDisplayName} (Xác thực 2 lớp OTP)</span>
-            </button>
-
-            {showBpLogin && (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 sm:p-4 space-y-3 select-text">
-                {!bpPendingUser ? (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-bold text-slate-900">
-                        {bpConfig.unitDisplayName} · Tài khoản phối hợp
-                      </p>
-                      <span className="text-[11px] text-slate-500 font-mono">2FA Demo</span>
-                    </div>
-
-                    <form onSubmit={handleBpCredentialsSubmit} className="space-y-2.5">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          value={bpUsername}
-                          onChange={(e) => setBpUsername(e.target.value)}
-                          placeholder="Tên đăng nhập (VD: bp_truc1)"
-                          className="min-h-[42px] px-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 focus:border-sky-600 focus:outline-none"
-                        />
-                        <input
-                          type="password"
-                          value={bpPassword}
-                          onChange={(e) => setBpPassword(e.target.value)}
-                          placeholder="Mật khẩu"
-                          className="min-h-[42px] px-3 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 focus:border-sky-600 focus:outline-none"
-                        />
-                      </div>
-                      <button
-                        type="submit"
-                        className="w-full min-h-[44px] rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-sm font-bold"
-                      >
-                        Tiếp tục nhận mã OTP 2 lớp
-                      </button>
-                    </form>
-
-                    <div className="pt-1 border-t border-slate-200 space-y-1.5">
-                      <p className="text-[11px] font-semibold text-slate-600">
-                        Chọn nhanh tài khoản mẫu (mật khẩu mặc định: <span className="font-mono">bp123456</span>):
-                      </p>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {[
-                          { u: 'bp_truc1', label: bpConfig.roleLabelTruc, sub: 'bp_truc1 · Bến Sa Kỳ / LS' },
-                          { u: 'bp_truc2', label: bpConfig.roleLabelTruc, sub: 'bp_truc2 · Tuần tra Đảo Bé' },
-                          { u: 'bp_chihuy1', label: bpConfig.roleLabelChiHuy, sub: 'bp_chihuy1 · Đồn trưởng' },
-                          { u: 'bp_chihuy2', label: bpConfig.roleLabelChiHuy, sub: 'bp_chihuy2 · Phó Đồn trưởng' },
-                        ].map((acc) => (
-                          <button
-                            key={acc.u}
-                            type="button"
-                            onClick={() => {
-                              setBpUsername(acc.u);
-                              setBpPassword('bp123456');
-                              startBpOtpFlow(acc.u, 'bp123456');
-                            }}
-                            className="min-h-[44px] px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-sky-50 hover:border-sky-400 text-left transition"
-                          >
-                            <p className="text-[11px] font-bold text-slate-900 truncate">{acc.label}</p>
-                            <p className="text-[10px] font-mono text-slate-600 truncate">{acc.sub}</p>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <form onSubmit={handleBpOtpVerify} className="space-y-3">
-                    <div className="flex items-start gap-2 text-xs text-slate-800">
-                      <KeyRound className="w-4 h-4 text-sky-700 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="font-bold">
-                          Xác thực 2 lớp cho: {bpPendingUser.fullName} (@{bpPendingUser.username})
-                        </p>
-                        <p className="mt-1 px-2.5 py-1.5 rounded bg-amber-100 border border-amber-300 text-amber-950 font-mono font-bold">
-                          Mã OTP xác thực 2 lớp (Demo): {generatedOtp}
-                        </p>
-                      </div>
-                    </div>
-
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={6}
-                      value={otpInput}
-                      onChange={(e) => setOtpInput(e.target.value)}
-                      placeholder="Nhập mã OTP 6 chữ số"
-                      className="w-full min-h-[44px] px-3 rounded-lg border border-slate-300 bg-white text-center text-lg font-mono font-bold tracking-widest text-slate-900"
-                    />
-
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setBpPendingUser(null);
-                          setOtpInput('');
-                        }}
-                        className="min-h-[44px] px-3 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700"
-                      >
-                        Đổi tài khoản
-                      </button>
-                      <button
-                        type="submit"
-                        className="flex-1 min-h-[44px] rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-bold"
-                      >
-                        Xác nhận OTP & Vào phân hệ
-                      </button>
-                    </div>
-                  </form>
-                )}
-              </div>
-            )}
 
             {onOpenPublicVerify && (
               <button

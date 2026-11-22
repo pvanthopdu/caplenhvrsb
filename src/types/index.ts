@@ -42,6 +42,7 @@ export interface UserAccount {
   createdAt?: string;
   lastLogin?: string;
   notes?: string;
+  isPreAssigned?: boolean;
 }
 
 // 18 Trạng thái hồ sơ chuẩn theo đặc tả quy trình
@@ -138,6 +139,10 @@ export interface Vessel {
   ownerName: string;         // Chủ sở hữu
   ownerPhone: string;
   ownerAddress?: string;     // Địa chỉ chủ phương tiện
+  ownerEmail?: string;       // Email liên hệ chủ phương tiện
+  captainName?: string;      // Tên thuyền trưởng phụ trách
+  captainPhone?: string;     // Số điện thoại thuyền trưởng
+  notes?: string;            // Ghi chú liên hệ / điều hành
   isActive: boolean;
 }
 
@@ -353,10 +358,19 @@ export type ReturnEditScope =
   | 'bo_sung_chung_tu'
   | 'sua_toan_bo';
 
-export type ReturnScope = ReturnEditScope | 'BO_SUNG_THONG_TIN' | 'SUA_DANH_SACH_NGUOI';
+export type ReturnScope =
+  | ReturnEditScope
+  | 'BO_SUNG_THONG_TIN'
+  | 'SUA_DANH_SACH_NGUOI'
+  | 'THAY_DOI_THUYEN_VIEN_CHO'
+  | 'bql_sai_kiem_tra_ben'
+  | 'bql_sai_thong_bao'
+  | 'bql_thieu_xac_minh_phi'
+  | 'bql_lech_doi_chieu';
 
 export interface LastReturnInfo {
   benTra: ReturnSourceParty;
+  benSai?: 'BQL_CANG' | 'CHU_TAU';
   lyDo: string;
   nhomLoi?: ReturnErrorGroup;
   phamVi?: ReturnScope;
@@ -470,11 +484,21 @@ export interface BpDepartureControlRecord {
   shiftId?: string;
   shiftName?: string;
   qrVerified?: boolean;
+  scannedQrCode?: string;
+  permitQrChecks?: {
+    hasPermit: boolean;
+    matchesVessel: boolean;
+    within24h: boolean;
+    outcome?: QrVerifyOutcomeCode;
+  };
   permitStatusAtCheck?: string;
   scheduledTotalPeople?: number;
   actualTotalPeople?: number;
   actualCrewCount?: number;
   actualPassengerCount?: number;
+  absentCount?: number;
+  crewChanged?: boolean;
+  crewChangeNote?: string;
   checklist: BpPersonCheckItem[];
   unlistedPeople: BpUnlistedPerson[];
   hasAnomaly?: boolean;
@@ -861,9 +885,11 @@ export interface IncomingDossier {
 export type BpStopType = 'dinh_chi_lenh'; // Chỉ còn tạm giữ / đình chỉ sau khi đã cấp phép
 
 export type BpStopReasonCode =
-  | 'an_ninh_trat_tu'
   | 'nghi_buon_lau_gian_lan_thuong_mai'
+  | 'hang_cam'
   | 'nguoi_dang_bi_truy_tim_hoac_cam_xuat_canh'
+  | 'giay_to_gia'
+  | 'an_ninh_trat_tu'
   | 'so_nguoi_thuc_te_khac_danh_sach'
   | 'vi_pham_an_toan_giao_thong'
   | 'thoi_tiet_bien_dong'
@@ -942,6 +968,7 @@ export interface AdminOperationalConfig {
   bqlProcessingSlaMinutes: number;    // Mặc định 60 phút
   deptProcessingSlaMinutes: number;   // Mặc định 60 phút
   officeUploadSlaMinutes: number;     // Mặc định 10 phút
+  paginationPageSize?: number;        // Mặc định 15 bản ghi / trang
   bqlChecklistConfig: BqlChecklistItemConfig[];
 }
 

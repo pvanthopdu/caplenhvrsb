@@ -13,6 +13,7 @@ import {
   formatDateTime,
   getBpStopReasonLabel,
 } from '../../utils/formatters';
+import { PaginationBar, usePagination } from '../../components/PaginationBar';
 
 interface BpReportPageProps {
   currentUser: UserAccount;
@@ -66,6 +67,15 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
       return periodMatch(k.thoiDiem) || filteredTripIds.has(k.hoSoId);
     });
   }, [kiemSoatList, filteredTripIds, portFilter, periodMode, selectedDay, selectedMonth]);
+
+  const discrepancyControls = useMemo(
+    () => filteredControls.filter((k) => k.ketQua === 'chenh_lech'),
+    [filteredControls]
+  );
+
+  const filterKey = `${periodMode}|${selectedDay}|${selectedMonth}|${portFilter}`;
+  const stopsPagination = usePagination(filteredStops, filterKey);
+  const discrepanciesPagination = usePagination(discrepancyControls, filterKey);
 
   const summary = useMemo(() => {
     const tripTurns = filteredTrips.length;
@@ -373,59 +383,71 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
             Chi tiết thời gian từ lúc tạm giữ → gỡ & kết quả xác minh
           </h2>
         </div>
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="w-full text-left text-xs sm:text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr>
-                <th className="px-3 py-2.5 font-semibold">Hồ sơ / Tàu</th>
-                <th className="px-3 py-2.5 font-semibold">Nhóm lý do</th>
-                <th className="px-3 py-2.5 font-semibold">Người lập / Thời điểm</th>
-                <th className="px-3 py-2.5 font-semibold">Thời gian xử lý</th>
-                <th className="px-3 py-2.5 font-semibold">Kết quả xác minh</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {filteredStops.map((d) => {
-                const trip = trips.find((t) => t.id === d.hoSoId);
-                const durMin = d.thoiDiemGo
-                  ? Math.max(0, Math.round((new Date(d.thoiDiemGo).getTime() - new Date(d.thoiDiem).getTime()) / 60000))
-                  : null;
-                return (
-                  <tr key={d.id}>
-                    <td className="px-3 py-2.5 align-top">
-                      <p className="font-bold text-slate-900">{trip?.vesselName || d.hoSoId}</p>
-                      <p className="font-mono text-xs text-slate-500">{trip?.tripNumber || d.hoSoId}</p>
-                    </td>
-                    <td className="px-3 py-2.5 align-top">
-                      <p className="font-semibold text-slate-900">Tạm giữ / Đình chỉ xuất bến</p>
-                      <p className="text-xs text-slate-600">{getBpStopReasonLabel(d.maLyDo)}</p>
-                    </td>
-                    <td className="px-3 py-2.5 align-top text-xs">
-                      <p className="font-medium text-slate-800">{d.nguoiDeNghi}</p>
-                      <p className="font-mono text-slate-500">{formatDateTime(d.thoiDiem)}</p>
-                    </td>
-                    <td className="px-3 py-2.5 align-top font-mono tabular-nums text-xs">
-                      {durMin !== null ? (
-                        <span className="text-emerald-700 font-bold">{durMin} phút</span>
-                      ) : (
-                        <span className="text-red-700 font-bold">Đang tạm giữ</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 align-top text-xs text-slate-700">
-                      {d.ketQuaXacMinh || 'Chưa gỡ tạm giữ'}
+        <div className="rounded-lg border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[680px] text-left text-xs sm:text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="px-3 py-2.5 font-semibold">Hồ sơ / Tàu</th>
+                  <th className="px-3 py-2.5 font-semibold">Nhóm lý do</th>
+                  <th className="px-3 py-2.5 font-semibold">Người lập / Thời điểm</th>
+                  <th className="px-3 py-2.5 font-semibold">Thời gian xử lý</th>
+                  <th className="px-3 py-2.5 font-semibold">Kết quả xác minh</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {stopsPagination.pageItems.map((d) => {
+                  const trip = trips.find((t) => t.id === d.hoSoId);
+                  const durMin = d.thoiDiemGo
+                    ? Math.max(0, Math.round((new Date(d.thoiDiemGo).getTime() - new Date(d.thoiDiem).getTime()) / 60000))
+                    : null;
+                  return (
+                    <tr key={d.id}>
+                      <td className="px-3 py-2.5 align-top">
+                        <p className="font-bold text-slate-900">{trip?.vesselName || d.hoSoId}</p>
+                        <p className="font-mono text-xs text-slate-500">{trip?.tripNumber || d.hoSoId}</p>
+                      </td>
+                      <td className="px-3 py-2.5 align-top">
+                        <p className="font-semibold text-slate-900">Tạm giữ / Đình chỉ xuất bến</p>
+                        <p className="text-xs text-slate-600">{getBpStopReasonLabel(d.maLyDo)}</p>
+                      </td>
+                      <td className="px-3 py-2.5 align-top text-xs">
+                        <p className="font-medium text-slate-800">{d.nguoiDeNghi}</p>
+                        <p className="font-mono text-slate-500">{formatDateTime(d.thoiDiem)}</p>
+                      </td>
+                      <td className="px-3 py-2.5 align-top font-mono tabular-nums text-xs">
+                        {durMin !== null ? (
+                          <span className="text-emerald-700 font-bold">{durMin} phút</span>
+                        ) : (
+                          <span className="text-red-700 font-bold">Đang tạm giữ</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 align-top text-xs text-slate-700">
+                        {d.ketQuaXacMinh || 'Chưa gỡ tạm giữ'}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredStops.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
+                      Không có dữ liệu tạm giữ trong kỳ.
                     </td>
                   </tr>
-                );
-              })}
-              {filteredStops.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
-                    Không có dữ liệu tạm giữ trong kỳ.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <PaginationBar
+            currentPage={stopsPagination.currentPage}
+            totalPages={stopsPagination.totalPages}
+            totalItems={stopsPagination.totalItems}
+            pageSize={stopsPagination.pageSize}
+            startIndex={stopsPagination.startIndex}
+            endIndex={stopsPagination.endIndex}
+            onPageChange={stopsPagination.setCurrentPage}
+            itemLabel="biên bản"
+          />
         </div>
       </div>
 
@@ -437,20 +459,19 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
             Các trường hợp chênh lệch quân số kiểm soát tại bến
           </h2>
         </div>
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="w-full text-left text-xs sm:text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr>
-                <th className="px-3 py-2.5 font-semibold">Hồ sơ / Tàu</th>
-                <th className="px-3 py-2.5 font-semibold">Thực tế / Danh sách</th>
-                <th className="px-3 py-2.5 font-semibold">Ghi chú</th>
-                <th className="px-3 py-2.5 font-semibold">Cán bộ kiểm soát</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {filteredControls
-                .filter((k) => k.ketQua === 'chenh_lech')
-                .map((k) => {
+        <div className="rounded-lg border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[600px] text-left text-xs sm:text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="px-3 py-2.5 font-semibold">Hồ sơ / Tàu</th>
+                  <th className="px-3 py-2.5 font-semibold">Thực tế / Danh sách</th>
+                  <th className="px-3 py-2.5 font-semibold">Ghi chú</th>
+                  <th className="px-3 py-2.5 font-semibold">Cán bộ kiểm soát</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {discrepanciesPagination.pageItems.map((k) => {
                   const trip = trips.find((t) => t.id === k.hoSoId);
                   return (
                     <tr key={k.id}>
@@ -468,15 +489,26 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
                     </tr>
                   );
                 })}
-              {filteredControls.filter((k) => k.ketQua === 'chenh_lech').length === 0 && (
-                <tr>
-                  <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
-                    Không có trường hợp chênh lệch kiểm soát tại bến trong kỳ.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                {discrepancyControls.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
+                      Không có trường hợp chênh lệch kiểm soát tại bến trong kỳ.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <PaginationBar
+            currentPage={discrepanciesPagination.currentPage}
+            totalPages={discrepanciesPagination.totalPages}
+            totalItems={discrepanciesPagination.totalItems}
+            pageSize={discrepanciesPagination.pageSize}
+            startIndex={discrepanciesPagination.startIndex}
+            endIndex={discrepanciesPagination.endIndex}
+            onPageChange={discrepanciesPagination.setCurrentPage}
+            itemLabel="trường hợp"
+          />
         </div>
       </div>
     </div>

@@ -19,7 +19,6 @@ import { exportTripsToExcel } from '../utils/exportUtils';
 import {
   getUserAccessibleVesselIds,
   isTripAccessibleToUser,
-  isUrgentTripForUserRole,
   normalizeStatus,
 } from '../utils/userPermissions';
 import {
@@ -37,6 +36,7 @@ import {
 } from 'lucide-react';
 import { TripTimelineTree } from '../components/TripTimelineTree';
 import { CoastalPageHero } from '../components/CoastalPageHero';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 
 interface TripListPageProps {
   currentUser: UserAccount;
@@ -118,19 +118,27 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
     return counts;
   }, [baseRoleTrips, roleStatusMap]);
 
-  // Số lượng hồ sơ đang chờ chính tài khoản này xử lý
+  // Số lượng hồ sơ đang chờ chính tài khoản này xử lý (kiểm tra chặt vai trò + bến + ca trực)
+  const myActionMap = useMemo(() => {
+    const map = new Map<string, boolean>();
+    baseRoleTrips.forEach((t) => {
+      map.set(t.id, repository.isTripMyAction(currentUser, t, currentTime));
+    });
+    return map;
+  }, [baseRoleTrips, currentUser, currentTime]);
+
   const actionRequiredCount = useMemo(() => {
-    return baseRoleTrips.filter((t) => roleStatusMap.get(t.id)?.isMyActionRequired).length;
-  }, [baseRoleTrips, roleStatusMap]);
+    return baseRoleTrips.filter((t) => myActionMap.get(t.id)).length;
+  }, [baseRoleTrips, myActionMap]);
 
   // Thống kê nhanh quá hạn thời gian thực: Chỉ tính hồ sơ quá hạn thuộc đúng nhiệm vụ của tài khoản
   const overdueCount = useMemo(() => {
     return baseRoleTrips.filter((t) => {
+      if (!myActionMap.get(t.id)) return false;
       const e = repository.evaluateTripPhaseRealtime(t, currentTime);
-      const isUrgent = e.isTripOverdue || e.isPhaseOverdue || t.isOverallOverdue;
-      return isUrgent && isUrgentTripForUserRole(currentUser.role, t, e);
+      return Boolean(e.isTripOverdue || e.isPhaseOverdue || t.isOverallOverdue);
     }).length;
-  }, [baseRoleTrips, currentTime, currentUser.role]);
+  }, [baseRoleTrips, myActionMap, currentTime]);
 
   const roleFilterOptions = useMemo(() => {
     return getRoleStatusFilterOptions(currentUser.role);
@@ -149,14 +157,15 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
 
       let matchStatus = false;
       const roleStatus = roleStatusMap.get(t.id);
+      const isMyTask = Boolean(myActionMap.get(t.id));
       if (selectedStatus === 'ALL') {
         matchStatus = true;
       } else if (selectedStatus === 'MY_ACTION') {
-        matchStatus = Boolean(roleStatus?.isMyActionRequired);
+        matchStatus = isMyTask;
       } else if (selectedStatus === 'OVERDUE') {
         const e = repository.evaluateTripPhaseRealtime(t, currentTime);
         const isUrgent = e.isTripOverdue || e.isPhaseOverdue || t.isOverallOverdue;
-        matchStatus = Boolean(isUrgent && isUrgentTripForUserRole(currentUser.role, t, e));
+        matchStatus = Boolean(isUrgent && isMyTask);
       } else {
         matchStatus = roleStatus?.statusKey === selectedStatus;
       }
@@ -166,7 +175,12 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
 
       return matchSearch && matchVessel && matchStatus && matchPort;
     });
-  }, [baseRoleTrips, roleStatusMap, searchTerm, selectedVessel, selectedStatus, selectedPort, currentUser.role, currentTime]);
+  }, [baseRoleTrips, roleStatusMap, myActionMap, searchTerm, selectedVessel, selectedStatus, selectedPort, currentTime]);
+
+  const pagination = usePagination(
+    filteredTrips,
+    `${searchTerm.trim().toLowerCase()}|${selectedVessel}|${selectedStatus}|${selectedPort}`
+  );
 
   return (
     <div className="space-y-5 sm:space-y-6">
@@ -336,8 +350,10 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
               Không tìm thấy hồ sơ nào khớp với bộ lọc
             </div>
           ) : (
-            filteredTrips.map((trip) => {
+            pagination.pageItems.map((trip) => {
               const s = roleStatusMap.get(trip.id) || getRoleTripStatusInfo(trip, currentUser.role);
+              const isMyTask = Boolean(myActionMap.get(trip.id));
+              const handler = repository.getCurrentTripHandler(trip, currentTime);
               const st = normalizeStatus(trip.status);
               const bqlClk = repository.computeBqlClockMinutes(trip, currentTime);
               const deptClk = repository.computeDeptClockMinutes(trip, currentTime);
@@ -356,7 +372,7 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                   key={trip.id}
                   onClick={() => onNavigate('trip-detail', trip.id)}
                   className={`p-4 sm:p-5 hover:bg-[#f5f9ff] active:bg-[#edf4ff] transition cursor-pointer space-y-3 ${
-                    s.isMyActionRequired ? 'bg-[#f4f8ff]' : ''
+                    isMyTask ? 'bg-[#f4f8ff]' : ''
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -431,9 +447,16 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 text-xs sm:text-sm text-[#526c93] pt-0.5">
-                    <span>Người khai: <strong className="text-[#07244d]">{trip.createdByName}</strong></span>
-                    {s.isMyActionRequired && s.actionLabel && s.actionPage ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs sm:text-sm text-[#526c93] pt-0.5">
+                    <div className="space-y-0.5">
+                      <div>
+                        Người khai: <strong className="text-[#07244d]">{trip.createdByName}</strong>
+                      </div>
+                      <div className="text-[11px] text-indigo-700 font-semibold">
+                        Người xử lý: <strong className="text-indigo-900">{handler.handlerName}</strong> ({handler.unitLabel})
+                      </div>
+                    </div>
+                    {isMyTask && s.actionLabel && s.actionPage ? (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -467,7 +490,7 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                 <th className="py-4 px-4">Tuyến hành trình</th>
                 <th className="py-4 px-4">Giờ dự kiến rời</th>
                 <th className="py-4 px-4">Khách / Hàng</th>
-                <th className="py-4 px-4">Người khai</th>
+                <th className="py-4 px-4">Người khai / Người xử lý</th>
                 <th className="py-4 px-4">Trạng thái lệnh (Theo tài khoản)</th>
                 <th className="py-4 px-4 text-right">Thao tác / Tiến độ</th>
               </tr>
@@ -480,8 +503,10 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                   </td>
                 </tr>
               ) : (
-                filteredTrips.map((trip) => {
+                pagination.pageItems.map((trip) => {
                   const s = roleStatusMap.get(trip.id) || getRoleTripStatusInfo(trip, currentUser.role);
+                  const isMyTask = Boolean(myActionMap.get(trip.id));
+                  const handler = repository.getCurrentTripHandler(trip, currentTime);
                   const st = normalizeStatus(trip.status);
                   const bqlClk = repository.computeBqlClockMinutes(trip, currentTime);
                   const deptClk = repository.computeDeptClockMinutes(trip, currentTime);
@@ -500,7 +525,7 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                       key={trip.id}
                       onClick={() => onNavigate('trip-detail', trip.id)}
                       className={`hover:bg-blue-50/50 transition cursor-pointer ${
-                        s.isMyActionRequired ? 'bg-blue-50/25' : ''
+                        isMyTask ? 'bg-blue-50/25' : ''
                       }`}
                     >
                       <td className="py-4 px-4">
@@ -545,20 +570,31 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                             Khai thay
                           </span>
                         )}
+                        <div className="mt-1 pt-1 border-t border-slate-100">
+                          <div className="text-[11px] font-bold text-indigo-800 flex items-center gap-1">
+                            <span>Xử lý: {handler.handlerName}</span>
+                            {isMyTask && (
+                              <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[9px] font-extrabold uppercase">
+                                Của tôi
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-500 font-medium">{handler.unitLabel}</div>
+                        </div>
                       </td>
                       <td className="py-4 px-4">
                         <div className="space-y-1">
                           <span
                             className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black border ${s.badgeBg} ${s.badgeText} ${s.badgeBorder}`}
                           >
-                            {s.isMyActionRequired && (
+                            {isMyTask && (
                               <span className="w-2 h-2 rounded-full bg-current animate-pulse shrink-0" />
                             )}
                             {s.label}
                           </span>
                           <div
                             className={`text-[11px] font-bold ${
-                              s.isMyActionRequired ? 'text-blue-700' : 'text-slate-500'
+                              isMyTask ? 'text-blue-700' : 'text-slate-500'
                             }`}
                           >
                             {s.subLabel}
@@ -603,7 +639,7 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                       </td>
                       <td className="py-4 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {s.isMyActionRequired && s.actionLabel && s.actionPage && (
+                          {isMyTask && s.actionLabel && s.actionPage && (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -649,6 +685,17 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
             </tbody>
           </table>
         </div>
+
+        <PaginationBar
+          currentPage={pagination.currentPage}
+          totalPages={pagination.totalPages}
+          totalItems={pagination.totalItems}
+          pageSize={pagination.pageSize}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setCurrentPage}
+          itemLabel="hồ sơ"
+        />
       </div>
 
       {/* MODAL CÂY THỜI GIAN TIẾN ĐỘ XỬ LÝ HỒ SƠ */}

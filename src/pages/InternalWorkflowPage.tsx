@@ -12,7 +12,7 @@ import {
   normalizeStatus,
 } from '../types';
 import { repository } from '../services/repository';
-import { formatDateTime, getStatusInfo } from '../utils/formatters';
+import { formatDateTime, getStatusInfo, getReturnScopeLabel } from '../utils/formatters';
 import {
   Clock,
   CheckCircle2,
@@ -64,6 +64,7 @@ const DEPT_QUEUE_STATUSES = [
   'DANG_TRINH_OFFICE',
   'OFFICE_TRA_LAI',
   'DA_CAP_PHEP',
+  'TAM_GIU_BIEN_PHONG',
 ];
 
 function toDatetimeLocalValue(iso?: string): string {
@@ -151,13 +152,12 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     'Gió vượt cấp 6 / sóng trên 2.0m — tạm dừng cấp phép toàn tuyến.'
   );
 
-  // Return modals (Trả Chủ tàu / Trả BQL Cảng)
-  const [showReturnCaptainModal, setShowReturnCaptainModal] = useState<boolean>(false);
-  const [captainReturnScope, setCaptainReturnScope] = useState<ReturnScope>('BO_SUNG_THONG_TIN');
-  const [captainReturnReason, setCaptainReturnReason] = useState<string>('');
-
-  const [showReturnPortModal, setShowReturnPortModal] = useState<boolean>(false);
-  const [portReturnReason, setPortReturnReason] = useState<string>('');
+  // Modal Xác định bên sai (Cảng hay Chủ tàu) & Trả hồ sơ không đạt
+  const [showReturnFaultModal, setShowReturnFaultModal] = useState<boolean>(false);
+  const [faultParty, setFaultParty] = useState<'BQL_CANG' | 'CHU_TAU'>('CHU_TAU');
+  const [captainReturnScope, setCaptainReturnScope] = useState<ReturnScope>('bo_sung_chung_tu');
+  const [portReturnScope, setPortReturnScope] = useState<ReturnScope>('bql_sai_kiem_tra_ben');
+  const [returnFaultReason, setReturnFaultReason] = useState<string>('');
 
   // Office submission & return
   const [officeDocRef, setOfficeDocRef] = useState<string>('');
@@ -282,35 +282,67 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     );
   };
 
-  const handleReturnCaptain = () => {
+  const openReturnFaultModal = (initialParty: 'BQL_CANG' | 'CHU_TAU') => {
     setActionErrorMsg(null);
+    setFaultParty(initialParty);
+    if (initialParty === 'BQL_CANG') {
+      if (paxMismatch || cargoMismatch) {
+        setPortReturnScope('bql_lech_doi_chieu');
+      } else if (!pi?.feeVerified) {
+        setPortReturnScope('bql_thieu_xac_minh_phi');
+      } else {
+        setPortReturnScope('bql_sai_kiem_tra_ben');
+      }
+    } else {
+      if (paxMismatch) setCaptainReturnScope('sua_hanh_khach');
+      else if (cargoMismatch) setCaptainReturnScope('sua_thong_tin_chung');
+      else setCaptainReturnScope('bo_sung_chung_tu');
+    }
+    setReturnFaultReason('');
+    setShowReturnFaultModal(true);
+  };
+
+  const handleConfirmReturnByFault = () => {
+    setActionErrorMsg(null);
+    if (!returnFaultReason.trim() || returnFaultReason.trim().length < 5) {
+      setActionErrorMsg('Vui lòng nhập rõ lý do không đạt và yêu cầu khắc phục (tối thiểu 5 ký tự).');
+      return;
+    }
+
+    if (faultParty === 'BQL_CANG') {
+      const res = repository.returnTripToPortFromDept(
+        trip.id,
+        currentUser,
+        returnFaultReason.trim(),
+        portReturnScope
+      );
+      if (!res.success) {
+        setActionErrorMsg(res.error || 'Không thể trả hồ sơ về BQL Cảng.');
+        return;
+      }
+      setShowReturnFaultModal(false);
+      setReturnFaultReason('');
+      setActionSuccessMsg(
+        `Đã xác định sai do Ban Quản lý Cảng → Trả hồ sơ ${trip.tripNumber} về BQL Cảng (${trip.departurePortName}) để rà soát lại (đồng hồ SLA Sở tạm dừng).`
+      );
+      return;
+    }
+
     const res = repository.returnTripToCaptainFromDept(
       trip.id,
       currentUser,
-      captainReturnReason,
+      returnFaultReason.trim(),
       captainReturnScope
     );
     if (!res.success) {
       setActionErrorMsg(res.error || 'Không thể trả hồ sơ về Chủ tàu.');
       return;
     }
-    setShowReturnCaptainModal(false);
-    setCaptainReturnReason('');
+    setShowReturnFaultModal(false);
+    setReturnFaultReason('');
     setActionSuccessMsg(
-      `Đã trả hồ sơ ${trip.tripNumber} về Chủ tàu. Sau khi sửa, Chủ tàu nộp lại sẽ chuyển thẳng về Chuyên viên Sở.`
+      `Đã xác định sai do Chủ tàu → Trả hồ sơ ${trip.tripNumber} về tài khoản Chủ tàu (${trip.captainName}). Sau khi sửa, Chủ tàu nộp lại sẽ chuyển thẳng về Chuyên viên Phòng ATGT.`
     );
-  };
-
-  const handleReturnPort = () => {
-    setActionErrorMsg(null);
-    const res = repository.returnTripToPortFromDept(trip.id, currentUser, portReturnReason);
-    if (!res.success) {
-      setActionErrorMsg(res.error || 'Không thể trả hồ sơ về BQL Cảng.');
-      return;
-    }
-    setShowReturnPortModal(false);
-    setPortReturnReason('');
-    setActionSuccessMsg(`Đã trả hồ sơ ${trip.tripNumber} về Ban Quản lý Cảng để kiểm tra bổ sung.`);
   };
 
   const handleApproveDraft = () => {
@@ -923,41 +955,88 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
 
         {/* CỘT 3: HÀNH ĐỘNG CHUYÊN VIÊN & QUY TRÌNH OFFICE */}
         <div className="space-y-5">
-          {/* TRẢ HỒ SƠ NẾU CHƯA ĐẠT */}
+          {/* 3A: XÁC ĐỊNH BÊN SAI (CẢNG HAY CHỦ TÀU) & TRẢ HỒ SƠ KHÔNG ĐẠT */}
           <div className="bg-white rounded-[20px] border border-[#dce8f7] p-5 shadow-xs space-y-3">
             <h3 className="font-black text-slate-900 uppercase flex items-center gap-2">
               <RotateCcw className="w-4 h-4 text-amber-600" />
-              3A. Trả lại nếu hồ sơ có thiếu sót
+              3A. Hồ sơ không đạt — Xác định bên sai &amp; Trả hồ sơ
             </h3>
-            <p className="text-[11px] text-slate-500">
-              Trả Chủ tàu sẽ nộp thẳng lại Chuyên viên; trả BQL Cảng sẽ tạm dừng đồng hồ Sở cho đến khi BQL gửi lại.
+            <p className="text-[11px] text-slate-600 leading-relaxed">
+              Khi kiểm tra phát hiện hồ sơ không đạt yêu cầu, Chuyên viên Phòng ATGT xác định nguyên nhân sai do{' '}
+              <strong>Ban Quản lý Cảng</strong> hay do <strong>Chủ tàu / Thuyền trưởng</strong> để trả về đúng nơi sai tương ứng.
             </p>
-            <div className="grid grid-cols-2 gap-2">
+
+            {/* Gợi ý nhanh các điểm chênh lệch phát hiện tự động */}
+            {(paxMismatch || cargoMismatch || (pi && pi.feeVerified === false) || pi?.conclusion === 'INELIGIBLE') && (
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[11px] text-amber-950 space-y-1">
+                <p className="font-black flex items-center gap-1 text-amber-900">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  Phát hiện điểm cần đối chiếu lại:
+                </p>
+                {paxMismatch && (
+                  <p>• Lệch số hành khách: Chủ tàu khai {trip.passengerCount} — BQL kiểm {pi?.actualPassengerCount}.</p>
+                )}
+                {cargoMismatch && (
+                  <p>• Lệch khối lượng hàng: Chủ tàu khai {trip.cargoTons} tấn — BQL kiểm {pi?.actualCargoTons} tấn.</p>
+                )}
+                {pi && pi.feeVerified === false && (
+                  <p>• Phí rời cảng (R11) chưa được BQL Cảng xác nhận đã nộp đủ.</p>
+                )}
+              </div>
+            )}
+
+            {/* Trạng thái đang trả về bên sai */}
+            {(canonicalStatus === 'TRA_BQL_CANG' || canonicalStatus === 'TRA_CHU_TAU') && trip.lastReturnInfo && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-950 space-y-1">
+                <p className="font-black uppercase text-rose-900">
+                  {canonicalStatus === 'TRA_BQL_CANG'
+                    ? 'Đang chờ Ban Quản lý Cảng khắc phục (TRA_BQL_CANG)'
+                    : 'Đang chờ Chủ tàu chỉnh sửa & nộp lại (TRA_CHU_TAU)'}
+                </p>
+                <p>
+                  Lý do: <strong>{trip.lastReturnInfo.lyDo}</strong>
+                </p>
+                {trip.lastReturnInfo.phamVi && (
+                  <p>Phạm vi: {getReturnScopeLabel(trip.lastReturnInfo.phamVi)}</p>
+                )}
+                <p className="text-rose-700 font-semibold">
+                  Đồng hồ SLA Sở Xây dựng đang tạm dừng cho đến khi bên sai gửi lại.
+                </p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
                 type="button"
                 disabled={
                   !canEditDept ||
-                  !['CHO_SO_XU_LY', 'DA_DUYET', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(
+                  !['DA_CHAP_THUAN', 'CHO_SO_XU_LY', 'DA_DUYET', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(
                     canonicalStatus || ''
                   )
                 }
-                onClick={() => setShowReturnCaptainModal(true)}
-                className="py-2.5 px-3 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-900 border border-amber-300 rounded-xl font-bold cursor-pointer"
+                onClick={() => openReturnFaultModal('BQL_CANG')}
+                className="py-2.5 px-3 bg-orange-50 hover:bg-orange-100 disabled:opacity-50 text-orange-950 border border-orange-300 rounded-xl font-black cursor-pointer text-left transition"
               >
-                Trả Chủ tàu
+                <span className="block text-[11px]">Sai do Cảng → Trả BQL Cảng</span>
+                <span className="block text-[10px] font-medium text-orange-700 mt-0.5">
+                  Sai kiểm tra Phụ lục 01 / Thông báo
+                </span>
               </button>
               <button
                 type="button"
                 disabled={
                   !canEditDept ||
-                  !['CHO_SO_XU_LY', 'DA_DUYET', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(
+                  !['DA_CHAP_THUAN', 'CHO_SO_XU_LY', 'DA_DUYET', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(
                     canonicalStatus || ''
                   )
                 }
-                onClick={() => setShowReturnPortModal(true)}
-                className="py-2.5 px-3 bg-orange-50 hover:bg-orange-100 disabled:opacity-50 text-orange-900 border border-orange-300 rounded-xl font-bold cursor-pointer"
+                onClick={() => openReturnFaultModal('CHU_TAU')}
+                className="py-2.5 px-3 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 text-amber-950 border border-amber-300 rounded-xl font-black cursor-pointer text-left transition"
               >
-                Trả BQL Cảng
+                <span className="block text-[11px]">Sai do Chủ tàu → Trả Chủ tàu</span>
+                <span className="block text-[10px] font-medium text-amber-700 mt-0.5">
+                  Sai khai báo / DS / chứng từ gốc
+                </span>
               </button>
             </div>
           </div>
@@ -1146,17 +1225,39 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
 
             {['DA_CAP_PHEP', 'TAM_GIU_BIEN_PHONG'].includes(canonicalStatus || '') && (
               <div className="pt-3 border-t border-slate-200 space-y-2">
-                <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-[11px] text-emerald-950">
-                  <p className="font-bold">✓ Đã phát hành Giấy phép số {trip.orderNumber}</p>
-                  <p>Hiệu lực 24h đến: {trip.orderValidUntil ? formatDateTime(trip.orderValidUntil) : '--'}</p>
-                </div>
+                {canonicalStatus === 'TAM_GIU_BIEN_PHONG' ? (
+                  <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-[11px] text-rose-950 space-y-1">
+                    <p className="font-extrabold text-rose-900">
+                      🚨 Biên phòng đang TẠM GIỮ — QR Giấy phép báo “Tạm đình chỉ”
+                    </p>
+                    {trip.bpDepartureControl?.anomalyDescription && (
+                      <p>
+                        <strong>Nội dung bất thường:</strong> {trip.bpDepartureControl.anomalyDescription}
+                        {trip.bpDepartureControl.soBienBanNgoai
+                          ? ` (Biên bản: ${trip.bpDepartureControl.soBienBanNgoai})`
+                          : ''}
+                      </p>
+                    )}
+                    <p className="text-rose-800">
+                      Biên phòng xử lý theo nghiệp vụ. Nếu Biên phòng không gỡ được tạm giữ, Chuyên viên thực hiện{' '}
+                      <strong>Thu hồi Giấy phép</strong> bên dưới.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-[11px] text-emerald-950">
+                    <p className="font-bold">✓ Đã phát hành Giấy phép số {trip.orderNumber}</p>
+                    <p>Hiệu lực 24h đến: {trip.orderValidUntil ? formatDateTime(trip.orderValidUntil) : '--'}</p>
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => setShowRevokeModal(true)}
-                  className="w-full py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="w-full py-2.5 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Ban className="w-4 h-4" />
-                  Thu hồi Giấy phép (THU_HOI)
+                  {canonicalStatus === 'TAM_GIU_BIEN_PHONG'
+                    ? 'Thu hồi Giấy phép (khi Biên phòng không gỡ được)'
+                    : 'Thu hồi Giấy phép (THU_HOI)'}
                 </button>
               </div>
             )}
@@ -1200,74 +1301,180 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
         </div>
       )}
 
-      {showReturnCaptainModal && (
+      {/* MODAL XÁC ĐỊNH BÊN SAI (CẢNG HAY CHỦ TÀU) & TRẢ HỒ SƠ KHÔNG ĐẠT */}
+      {showReturnFaultModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-amber-200 space-y-4 text-xs">
-            <h3 className="text-sm font-black text-amber-950 uppercase">Trả hồ sơ về Chủ tàu</h3>
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">Phạm vi yêu cầu sửa:</label>
-              <select
-                value={captainReturnScope}
-                onChange={(e) => setCaptainReturnScope(e.target.value as ReturnScope)}
-                className="w-full p-2 border border-slate-300 rounded-xl bg-white"
-              >
-                <option value="BO_SUNG_THONG_TIN">Bổ sung thông tin / chứng từ</option>
-                <option value="SUA_DANH_SACH_NGUOI">Sửa danh sách hành khách</option>
-                <option value="THAY_DOI_THUYEN_VIEN_CHO">Thay đổi thuyền viên / sức chở</option>
-              </select>
-            </div>
-            <textarea
-              rows={3}
-              value={captainReturnReason}
-              onChange={(e) => setCaptainReturnReason(e.target.value)}
-              placeholder="Nhập rõ lý do trả Chủ tàu..."
-              className="w-full p-2.5 border border-slate-300 rounded-xl"
-            />
-            <div className="flex justify-end gap-2">
+          <div className="bg-white rounded-2xl p-6 max-w-xl w-full shadow-2xl border border-amber-200 space-y-4 text-xs">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-black text-slate-900 uppercase">
+                  Xác định bên gây sai sót &amp; Trả hồ sơ không đạt
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Hồ sơ <strong>{trip.tripNumber}</strong> — Tàu <strong>{trip.vesselName}</strong> ({trip.vesselRegNumber})
+                </p>
+              </div>
               <button
                 type="button"
-                onClick={() => setShowReturnCaptainModal(false)}
-                className="px-4 py-2 bg-slate-100 rounded-xl font-semibold cursor-pointer"
+                onClick={() => setShowReturnFaultModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
               >
-                Hủy
-              </button>
-              <button
-                type="button"
-                onClick={handleReturnCaptain}
-                className="px-4 py-2 bg-amber-600 text-white rounded-xl font-bold cursor-pointer"
-              >
-                Xác nhận trả Chủ tàu
+                <X className="w-4 h-4" />
               </button>
             </div>
-          </div>
-        </div>
-      )}
 
-      {showReturnPortModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-orange-200 space-y-4 text-xs">
-            <h3 className="text-sm font-black text-orange-950 uppercase">Trả hồ sơ về Ban Quản lý Cảng</h3>
-            <textarea
-              rows={3}
-              value={portReturnReason}
-              onChange={(e) => setPortReturnReason(e.target.value)}
-              placeholder="Ghi rõ nội dung BQL Cảng cần kiểm tra lại tại bến..."
-              className="w-full p-2.5 border border-slate-300 rounded-xl"
-            />
+            {/* Bước 1: Chọn bên sai */}
+            <div className="space-y-1.5">
+              <label className="block font-black text-slate-800 uppercase text-[11px]">
+                Bước 1. Xác định sai sót do bên nào (*):
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setFaultParty('BQL_CANG')}
+                  className={`p-3 rounded-xl border-2 text-left transition cursor-pointer ${
+                    faultParty === 'BQL_CANG'
+                      ? 'bg-orange-50 border-orange-500 text-orange-950 shadow-xs'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <p className="font-black text-xs">1. Sai do Ban Quản lý Cảng</p>
+                  <p className="text-[11px] mt-0.5 opacity-85">
+                    Trả về BQL Cảng ({trip.departurePortName}) kiểm tra lại Phụ lục 01 / Thông báo chấp thuận.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFaultParty('CHU_TAU')}
+                  className={`p-3 rounded-xl border-2 text-left transition cursor-pointer ${
+                    faultParty === 'CHU_TAU'
+                      ? 'bg-amber-50 border-amber-500 text-amber-950 shadow-xs'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <p className="font-black text-xs">2. Sai do Chủ tàu / Thuyền trưởng</p>
+                  <p className="text-[11px] mt-0.5 opacity-85">
+                    Trả về tài khoản Chủ tàu ({trip.captainName}) chỉnh sửa hồ sơ &amp; nộp thẳng lại Sở.
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            {/* Bước 2: Phạm vi / Nhóm sai sót tương ứng */}
+            <div>
+              <label className="block font-black text-slate-800 uppercase text-[11px] mb-1">
+                Bước 2. {faultParty === 'BQL_CANG' ? 'Nội dung sai sót của BQL Cảng' : 'Phạm vi yêu cầu Chủ tàu chỉnh sửa'}:
+              </label>
+              {faultParty === 'BQL_CANG' ? (
+                <select
+                  value={portReturnScope}
+                  onChange={(e) => setPortReturnScope(e.target.value as ReturnScope)}
+                  className="w-full p-2.5 border border-orange-300 rounded-xl bg-white font-semibold"
+                >
+                  <option value="bql_sai_kiem_tra_ben">Sai sót kết quả kiểm tra thực tế tại bến (Phụ lục 01)</option>
+                  <option value="bql_sai_thong_bao">Sai sót trên Thông báo chấp thuận của BQL Cảng</option>
+                  <option value="bql_thieu_xac_minh_phi">Chưa xác minh đầy đủ chứng từ nộp phí, lệ phí (R11)</option>
+                  <option value="bql_lech_doi_chieu">Số liệu kiểm tra tại bến lệch với hồ sơ Chủ tàu</option>
+                </select>
+              ) : (
+                <select
+                  value={captainReturnScope}
+                  onChange={(e) => setCaptainReturnScope(e.target.value as ReturnScope)}
+                  className="w-full p-2.5 border border-amber-300 rounded-xl bg-white font-semibold"
+                >
+                  <option value="bo_sung_chung_tu">Bổ sung chứng từ đính kèm / biên lai phí / thông tin</option>
+                  <option value="sua_thong_tin_chung">Sửa thông tin chuyến / giờ chạy / hàng hóa</option>
+                  <option value="sua_thuyen_vien">Sửa danh sách thuyền viên &amp; chứng chỉ chuyên môn</option>
+                  <option value="sua_hanh_khach">Sửa danh sách hành khách / số lượng người</option>
+                  <option value="sua_toan_bo">Chỉnh sửa toàn bộ hồ sơ</option>
+                </select>
+              )}
+            </div>
+
+            {/* Bước 3: Lý do chi tiết + Gợi ý nhanh */}
+            <div className="space-y-1.5">
+              <label className="block font-black text-slate-800 uppercase text-[11px]">
+                Bước 3. Lý do trả hồ sơ &amp; yêu cầu khắc phục (*):
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {(faultParty === 'BQL_CANG'
+                  ? [
+                      'Số liệu kiểm đếm hành khách/hàng hóa tại Phụ lục 01 chưa khớp hồ sơ Chủ tàu, đề nghị BQL Cảng xác minh lại.',
+                      'Thông báo chấp thuận thiếu thông tin / chưa xác minh rõ biên lai nộp phí rời cảng (R11).',
+                      'Biên bản kiểm tra thực tế (Phụ lục 01) cần bổ sung ảnh hiện trường và ghi chú kiểm tra an toàn.',
+                    ]
+                  : [
+                      'Bản khai chung / Danh sách hành khách khai báo chưa chính xác, đề nghị Chủ tàu cập nhật lại.',
+                      'Chứng chỉ chuyên môn thuyền viên hoặc giấy tờ tàu đính kèm bị mờ/thiếu, đề nghị bổ sung bản rõ nét.',
+                      'Chứng từ nộp phí rời cảng chưa khớp mã giao dịch, đề nghị Chủ tàu bổ sung biên lai hợp lệ.',
+                    ]
+                ).map((sample, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setReturnFaultReason(sample)}
+                    className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold cursor-pointer text-left"
+                  >
+                    + Gợi ý {i + 1}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                rows={3}
+                value={returnFaultReason}
+                onChange={(e) => setReturnFaultReason(e.target.value)}
+                placeholder={
+                  faultParty === 'BQL_CANG'
+                    ? 'Ghi rõ nội dung BQL Cảng cần kiểm tra / đính chính lại...'
+                    : 'Ghi rõ nội dung Chủ tàu cần chỉnh sửa / bổ sung...'
+                }
+                className="w-full p-2.5 border border-slate-300 rounded-xl"
+              />
+            </div>
+
+            {/* Xem trước luồng chuyển trạng thái */}
+            <div
+              className={`p-3 rounded-xl border text-[11px] ${
+                faultParty === 'BQL_CANG'
+                  ? 'bg-orange-50 border-orange-200 text-orange-950'
+                  : 'bg-amber-50 border-amber-200 text-amber-950'
+              }`}
+            >
+              {faultParty === 'BQL_CANG' ? (
+                <p>
+                  <strong>Đích trả hồ sơ:</strong> Ban Quản lý Cảng ({trip.departurePortName}) • Trạng thái:{' '}
+                  <strong>TRA_BQL_CANG</strong> • Đồng hồ SLA Sở tạm dừng • Sau khi BQL Cảng cập nhật và gửi lại, hồ sơ quay về{' '}
+                  <strong>CHO_SO_XU_LY</strong>.
+                </p>
+              ) : (
+                <p>
+                  <strong>Đích trả hồ sơ:</strong> Tài khoản Chủ tàu ({trip.captainName} — {trip.vesselName}) • Trạng thái:{' '}
+                  <strong>TRA_CHU_TAU</strong> • Đồng hồ SLA Sở tạm dừng • Sau khi Chủ tàu chỉnh sửa &amp; nộp lại, hồ sơ chuyển thẳng về{' '}
+                  <strong>CHO_SO_XU_LY</strong> (giữ Thông báo chấp thuận BQL Cảng).
+                </p>
+              )}
+            </div>
+
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setShowReturnPortModal(false)}
-                className="px-4 py-2 bg-slate-100 rounded-xl font-semibold cursor-pointer"
+                onClick={() => setShowReturnFaultModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold cursor-pointer"
               >
                 Hủy
               </button>
               <button
                 type="button"
-                onClick={handleReturnPort}
-                className="px-4 py-2 bg-orange-600 text-white rounded-xl font-bold cursor-pointer"
+                onClick={handleConfirmReturnByFault}
+                className={`px-4 py-2 text-white rounded-xl font-black cursor-pointer ${
+                  faultParty === 'BQL_CANG'
+                    ? 'bg-orange-600 hover:bg-orange-700'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
               >
-                Xác nhận trả BQL Cảng
+                {faultParty === 'BQL_CANG'
+                  ? 'Xác nhận trả về Ban Quản lý Cảng'
+                  : 'Xác nhận trả về Chủ tàu'}
               </button>
             </div>
           </div>

@@ -731,13 +731,29 @@ export async function createApp(options: CreateAppOptions = {}) {
       if (!fs.existsSync(indexHtmlPath)) {
         console.warn('[Server] Cảnh báo: Chưa tìm thấy thư mục dist/index.html. Vui lòng chạy "npm run build" trước khi khởi động production.');
       }
-      app.use(express.static(distPath));
+      app.use(
+        '/assets',
+        express.static(path.join(distPath, 'assets'), {
+          maxAge: '7d',
+          immutable: true,
+        })
+      );
+      app.use(
+        express.static(distPath, {
+          setHeaders(res, filePath) {
+            if (filePath.endsWith('.html')) {
+              res.setHeader('Cache-Control', 'no-cache');
+            }
+          },
+        })
+      );
       app.get('*', (_req: Request, res: Response) => {
         if (!fs.existsSync(indexHtmlPath)) {
           return res.status(503).send(
             'Hệ thống chưa được build giao diện (thiếu dist/index.html). Quản trị viên vui lòng chạy "npm run build" trước khi khởi động server.'
           );
         }
+        res.setHeader('Cache-Control', 'no-cache');
         return res.sendFile(indexHtmlPath);
       });
     }

@@ -29,6 +29,7 @@ import { getUserAssignedPortId, normalizeStatus } from '../../utils/userPermissi
 import { BpDossierReadOnlyModal } from '../../components/bp/BpDossierReadOnlyModal';
 import { BpLiftStopModal } from '../../components/bp/BpStopActionModals';
 import { BpDepartureControlModal } from '../../components/bp/BpDepartureControlModal';
+import { PaginationBar, usePagination } from '../../components/PaginationBar';
 
 interface BpDailyTripsPageProps {
   currentUser: UserAccount;
@@ -150,6 +151,11 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
         return order(a.status) - order(b.status);
       });
   }, [trips, portFilter, statusFilter, searchQuery]);
+
+  const pagination = usePagination(
+    filteredTrips,
+    `${portFilter}|${statusFilter}|${searchQuery.trim().toLowerCase()}`
+  );
 
   const metrics = useMemo(() => {
     const readyControl = trips.filter((t) => normalizeStatus(t.status) === 'DA_CAP_PHEP').length;
@@ -307,11 +313,26 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
         </button>
       </div>
 
-      {!shiftCheck.allowed && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs sm:text-sm font-semibold text-amber-950 flex items-center gap-2">
-          <Lock className="w-4 h-4 text-amber-700 shrink-0" />
-          <span>{shiftCheck.reason}</span>
+      {shiftCheck.allowed && shiftCheck.shift ? (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-2.5 text-xs sm:text-sm font-semibold text-emerald-950 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
+            <span className="truncate">
+              Đang trong ca trực: <strong>{shiftCheck.shift.shiftName}</strong>
+              {currentUser.email ? ` (${currentUser.email})` : ''}
+            </span>
+          </div>
+          <span className="text-[11px] font-mono text-emerald-800 shrink-0">
+            {shiftCheck.shift.startTime}–{shiftCheck.shift.endTime}
+          </span>
         </div>
+      ) : (
+        !shiftCheck.allowed && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs sm:text-sm font-semibold text-amber-950 flex items-center gap-2">
+            <Lock className="w-4 h-4 text-amber-700 shrink-0" />
+            <span>{shiftCheck.reason}</span>
+          </div>
+        )
       )}
 
       {actionBanner && (
@@ -405,7 +426,7 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
 
       {/* Mobile Cards (< lg) */}
       <div className="lg:hidden space-y-3">
-        {filteredTrips.map((trip) => {
+        {pagination.pageItems.map((trip) => {
           const st = getStatusInfo(trip.status);
           const vessel = vessels.find((v) => v.id === trip.vesselId);
           const pax = trip.passengers?.length > 0 ? trip.passengers.length : trip.passengerCount;
@@ -445,11 +466,25 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
 
               <div className="text-xs text-slate-700 space-y-1">
                 <p>
-                  {trip.departurePortName} → {trip.arrivalPortName} · Giờ dự kiến:{' '}
+                  {trip.departurePortName} → {trip.arrivalPortName} · Giờ DK:{' '}
                   <strong className="font-mono tabular-nums">{formatTime(trip.scheduledDepartureTime)}</strong>
+                  {trip.actualDepartureTime && (
+                    <>
+                      {' '}· XB thực tế:{' '}
+                      <strong className="font-mono tabular-nums text-sky-800">
+                        {formatTime(trip.actualDepartureTime)}
+                      </strong>
+                    </>
+                  )}
                 </p>
                 <p className="font-mono tabular-nums">
                   {crewCount} TV · {pax}/{vessel?.maxPassengers || '--'} HK
+                  {typeof trip.bpDepartureControl?.actualTotalPeople === 'number' &&
+                    ['DA_XUAT_BEN', 'DA_CAP_BEN'].includes(normalizeStatus(trip.status)) && (
+                      <span className="text-emerald-800 font-bold">
+                        {' '}· Thực tế: {trip.bpDepartureControl.actualTotalPeople} người
+                      </span>
+                    )}
                 </p>
               </div>
 
@@ -470,6 +505,19 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
             Không tìm thấy chuyến tàu phù hợp bộ lọc.
           </div>
         )}
+        <div className="rounded-xl overflow-hidden border border-slate-200 bg-white empty:hidden">
+          <PaginationBar
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.totalItems}
+            pageSize={pagination.pageSize}
+            startIndex={pagination.startIndex}
+            endIndex={pagination.endIndex}
+            onPageChange={pagination.setCurrentPage}
+            itemLabel="chuyến tàu"
+            className="border-t-0"
+          />
+        </div>
       </div>
 
       {/* Desktop Table (>= lg) */}
@@ -486,7 +534,7 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
-              {filteredTrips.map((trip) => {
+              {pagination.pageItems.map((trip) => {
                 const st = getStatusInfo(trip.status);
                 const vessel = vessels.find((v) => v.id === trip.vesselId);
                 const pax = trip.passengers?.length > 0 ? trip.passengers.length : trip.passengerCount;
@@ -520,12 +568,23 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
                       <p className="font-mono tabular-nums text-slate-500 mt-0.5">
                         Giờ DK: {formatTime(trip.scheduledDepartureTime)}
                       </p>
+                      {trip.actualDepartureTime && (
+                        <p className="font-mono tabular-nums text-sky-800 font-semibold mt-0.5">
+                          XB thực tế: {formatTime(trip.actualDepartureTime)}
+                        </p>
+                      )}
                     </td>
                     <td className="px-4 py-3 align-top font-mono tabular-nums text-xs text-slate-800">
                       <p>{crewCount} thuyền viên</p>
                       <p className="text-slate-600 mt-0.5">
                         {pax} / {vessel?.maxPassengers || '--'} hành khách
                       </p>
+                      {typeof trip.bpDepartureControl?.actualTotalPeople === 'number' &&
+                        ['DA_XUAT_BEN', 'DA_CAP_BEN'].includes(normalizeStatus(trip.status)) && (
+                          <p className="text-emerald-800 font-bold mt-0.5">
+                            Thực tế (TKCN): {trip.bpDepartureControl.actualTotalPeople} người
+                          </p>
+                        )}
                     </td>
                     <td className="px-4 py-3 align-top space-y-1.5">
                       <span
@@ -551,6 +610,16 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
             </tbody>
           </table>
         </div>
+        <PaginationBar
+          currentPage={pagination.currentPage}
+          totalPages={pagination.totalPages}
+          totalItems={pagination.totalItems}
+          pageSize={pagination.pageSize}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setCurrentPage}
+          itemLabel="chuyến tàu"
+        />
       </div>
 
       {/* Modals */}
@@ -570,14 +639,15 @@ export const BpDailyTripsPage: React.FC<BpDailyTripsPageProps> = ({ currentUser,
           reloadData();
           if (updated) {
             const st = normalizeStatus(updated.status);
+            const actualTotal = updated.bpDepartureControl?.actualTotalPeople;
             setActionBanner({
               type: 'ok',
               text:
                 st === 'DA_XUAT_BEN'
-                  ? `Đã hoàn tất kiểm soát cuối cùng — CHO XUẤT BẾN tàu ${updated.vesselName}.`
+                  ? `Đạt cả 3 nội dung — CHO XUẤT BẾN tàu ${updated.vesselName} lúc ${formatTime(updated.actualDepartureTime)} (ghi nhận thực tế ${actualTotal ?? '--'} người phục vụ TKCN).`
                   : st === 'TRA_CHU_TAU'
-                  ? `Đã trả hồ sơ ${updated.tripNumber} về Chủ tàu do vi phạm R12 (Giấy phép cũ đã đình chỉ).`
-                  : `Đã lập biên bản Tạm giữ / Đình chỉ xuất bến tàu ${updated.vesselName}.`,
+                  ? `Đã trả hồ sơ ${updated.tripNumber} cho Chủ tàu điều chỉnh (BQL Cảng kiểm tra lại sức chở, áo phao → Sở cấp lại Giấy phép → Biên phòng kiểm soát lại).`
+                  : `Đã tạm giữ tàu ${updated.vesselName} — Giấy phép tự chuyển sang "Tạm đình chỉ" khi quét mã QR.`,
             });
           }
         }}

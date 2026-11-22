@@ -632,7 +632,8 @@ export class RulesEngine {
     }
 
     // ==========================================
-    // R12 (Chặn xuất bến): Kiểm soát Biên phòng phát hiện người lạ / tăng người / đổi thuyền viên
+    // R12 (Chặn xuất bến): Phát hiện người ngoài danh sách, vượt quân số hoặc đổi thuyền viên
+    // Lưu ý: Nếu chỉ có người vắng mặt thì ghi số người thực tế và VẪN cho xuất bến.
     // ==========================================
     if (isEnabled('R12')) {
       const control =
@@ -644,33 +645,42 @@ export class RulesEngine {
           ((trip.crewMembers?.length || 0) + (trip.passengers?.length || trip.passengerCount || 0));
         const actualTotal = control.actualTotalPeople ?? scheduledTotal;
         const hasExtra = actualTotal > scheduledTotal;
-        const hasMissingCrew = (control.checklist || []).some(
-          (item) => item.personType === 'CREW' && item.absent
-        );
         const hasCrewUnlisted = (control.unlistedPeople || []).some(
           (u) => u.personType === 'CREW'
         );
+        const hasCrewChanged = Boolean(control.crewChanged) || hasCrewUnlisted;
 
-        if (unlistedCount > 0 || hasExtra || hasCrewUnlisted || hasMissingCrew) {
+        if (unlistedCount > 0 || hasExtra || hasCrewChanged) {
           const issues: string[] = [];
           if (unlistedCount > 0) issues.push(`phát hiện ${unlistedCount} người ngoài danh sách`);
           if (hasExtra) issues.push(`số người thực tế (${actualTotal}) vượt danh sách (${scheduledTotal})`);
-          if (hasCrewUnlisted || hasMissingCrew) issues.push('có thay đổi / thiếu thuyền viên ngoài danh sách');
+          if (hasCrewChanged) {
+            issues.push(
+              control.crewChangeNote?.trim()
+                ? `đổi thuyền viên (${control.crewChangeNote.trim()})`
+                : 'có thay đổi thuyền viên so với danh sách đã cấp phép'
+            );
+          }
           results.push({
             ruleCode: 'R12',
             ruleName: 'Kiểm soát người lên tàu khớp danh sách đã cấp phép',
             status: 'FAILED',
             severity: 'BLOCKING',
-            message: `Vi phạm R12 khi kiểm soát xuất bến: ${issues.join('; ')}. Chặn xuất bến và chuyển trả Chủ tàu sửa hồ sơ.`,
-            details: 'Giấy phép cũ bị Tạm đình chỉ; Chủ tàu phải sửa danh sách và nộp lại qua BQL Cảng → Sở để cấp Giấy phép mới.',
+            message: `Vi phạm R12 khi kiểm soát xuất bến: ${issues.join('; ')}. Trả Chủ tàu điều chỉnh.`,
+            details:
+              'Quy trình xử lý lại: Chủ tàu điều chỉnh → Ban Quản lý cảng kiểm tra lại (sức chở, áo phao) → Sở cấp lại Giấy phép → Biên phòng kiểm soát lại.',
           });
         } else {
+          const absentCount = Math.max(0, scheduledTotal - actualTotal);
           results.push({
             ruleCode: 'R12',
             ruleName: 'Kiểm soát người lên tàu khớp danh sách đã cấp phép',
             status: 'PASSED',
             severity: 'INFO',
-            message: `Người lên tàu thực tế (${actualTotal}/${scheduledTotal}) khớp danh sách đã cấp phép.`,
+            message:
+              absentCount > 0
+                ? `Chỉ có ${absentCount} người vắng mặt — Ghi nhận thực tế ${actualTotal}/${scheduledTotal} người trên tàu, đủ điều kiện cho xuất bến.`
+                : `Người lên tàu thực tế (${actualTotal}/${scheduledTotal}) khớp danh sách đã cấp phép.`,
           });
         }
       } else {

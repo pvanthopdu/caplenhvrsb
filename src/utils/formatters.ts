@@ -106,12 +106,14 @@ export const BP_STOP_REASON_OPTIONS: Array<{
   value: import('../types').BpStopReasonCode;
   label: string;
 }> = [
-  { value: 'an_ninh_trat_tu', label: 'An ninh, trật tự tại bến / trên tuyến' },
-  { value: 'nghi_buon_lau_gian_lan_thuong_mai', label: 'Nghi vấn buôn lậu, gian lận thương mại' },
+  { value: 'nghi_buon_lau_gian_lan_thuong_mai', label: 'Nghi buôn lậu, gian lận thương mại' },
+  { value: 'hang_cam', label: 'Hàng cấm, hàng hóa trái phép' },
   {
     value: 'nguoi_dang_bi_truy_tim_hoac_cam_xuat_canh',
-    label: 'Có người đang bị truy tìm hoặc cấm xuất cảnh',
+    label: 'Đối tượng truy nã / cấm xuất cảnh',
   },
+  { value: 'giay_to_gia', label: 'Giấy tờ giả mạo, không hợp lệ' },
+  { value: 'an_ninh_trat_tu', label: 'Vi phạm an ninh, trật tự' },
   { value: 'so_nguoi_thuc_te_khac_danh_sach', label: 'Số người thực tế khác danh sách khai báo' },
   { value: 'vi_pham_an_toan_giao_thong', label: 'Vi phạm an toàn giao thông đường thủy' },
   { value: 'thoi_tiet_bien_dong', label: 'Thời tiết biển động, nguy cơ mất an toàn' },
@@ -146,13 +148,24 @@ export function getReturnScopeLabel(scope?: ReturnEditScope | string): string {
     case 'sua_thong_tin_chung':
       return 'Sửa thông tin chuyến / giờ chạy / hàng hóa';
     case 'sua_thuyen_vien':
-      return 'Sửa danh sách thuyền viên & chứng chỉ';
+    case 'THAY_DOI_THUYEN_VIEN_CHO':
+      return 'Sửa danh sách thuyền viên / chứng chỉ / sức chở';
     case 'sua_hanh_khach':
-      return 'Sửa danh sách hành khách';
+    case 'SUA_DANH_SACH_NGUOI':
+      return 'Sửa danh sách hành khách / số người';
     case 'bo_sung_chung_tu':
-      return 'Bổ sung chứng từ đính kèm / chứng từ phí';
+    case 'BO_SUNG_THONG_TIN':
+      return 'Bổ sung chứng từ đính kèm / biên lai phí / thông tin';
     case 'sua_toan_bo':
       return 'Chỉnh sửa toàn bộ hồ sơ';
+    case 'bql_sai_kiem_tra_ben':
+      return 'Sai sót kết quả kiểm tra thực tế tại bến (Phụ lục 01)';
+    case 'bql_sai_thong_bao':
+      return 'Sai sót trên Thông báo chấp thuận của BQL Cảng';
+    case 'bql_thieu_xac_minh_phi':
+      return 'Chưa xác minh đầy đủ chứng từ nộp phí, lệ phí (R11)';
+    case 'bql_lech_doi_chieu':
+      return 'Số liệu đối chiếu tại bến lệch với hồ sơ Chủ tàu';
     default:
       return 'Chỉnh sửa và bổ sung theo lý do trả lại';
   }
@@ -456,20 +469,28 @@ export function getRoleTripStatusInfo(trip: TripRecord, userRole: UserRole): Rol
   }
 
   if (status === 'TAM_GIU_BIEN_PHONG') {
+    const isBp = userRole === 'BP_TRUC' || userRole === 'BP_CHIHUY';
+    const isOfficer = userRole === 'OFFICER' || userRole === 'DEPT_HEAD' || userRole === 'ADMIN';
     return {
       statusKey: 'TAM_GIU_BIEN_PHONG',
       label: userRole === 'CAPTAIN' ? 'Tạm giữ / Đình chỉ xuất bến' : 'Biên phòng tạm giữ',
       subLabel:
         userRole === 'CAPTAIN'
           ? 'Tàu tạm dừng xuất bến theo kiểm soát của lực lượng Biên phòng'
-          : 'Phát hiện bất thường sau cấp phép — QR báo Tạm đình chỉ',
+          : isOfficer
+          ? 'QR đang báo Tạm đình chỉ — Nếu Biên phòng không gỡ được, Chuyên viên thu hồi Giấy phép'
+          : 'Phát hiện bất thường — QR tự chuyển Tạm đình chỉ để Biên phòng xử lý nghiệp vụ',
       badgeBg: info.badgeBg,
       badgeText: info.badgeText,
       badgeBorder: info.badgeBorder,
       description: info.description,
-      isMyActionRequired: userRole === 'BP_TRUC' || userRole === 'BP_CHIHUY',
-      actionLabel: userRole === 'BP_TRUC' || userRole === 'BP_CHIHUY' ? 'Xử lý / Gỡ tạm giữ' : undefined,
-      actionPage: userRole === 'BP_TRUC' || userRole === 'BP_CHIHUY' ? 'bp-daily-trips' : undefined,
+      isMyActionRequired: isBp || isOfficer,
+      actionLabel: isBp
+        ? 'Xử lý / Gỡ tạm giữ'
+        : isOfficer
+        ? 'Xem / Thu hồi Giấy phép'
+        : undefined,
+      actionPage: isBp ? 'bp-daily-trips' : isOfficer ? 'internal-workflow' : undefined,
     };
   }
 
@@ -555,9 +576,9 @@ export function getRoleTripStatusInfo(trip: TripRecord, userRole: UserRole): Rol
             status === 'TRA_BQL_CANG'
               ? trip.lastReturnInfo?.lyDo || 'Chuyên viên Sở yêu cầu rà soát lại'
               : 'Kiểm tra chứng từ phí, tàu thực tế & cấp Thông báo chấp thuận',
-          badgeBg: 'bg-blue-100',
-          badgeText: 'text-blue-900',
-          badgeBorder: 'border-blue-400',
+          badgeBg: status === 'TRA_BQL_CANG' ? 'bg-amber-100' : 'bg-blue-100',
+          badgeText: status === 'TRA_BQL_CANG' ? 'text-amber-950' : 'text-blue-900',
+          badgeBorder: status === 'TRA_BQL_CANG' ? 'border-amber-400' : 'border-blue-400',
           description: info.description,
           isMyActionRequired: true,
           actionLabel: status === 'TRA_BQL_CANG' ? 'Rà soát & Gửi lại Sở' : 'Kiểm tra tại bến',
