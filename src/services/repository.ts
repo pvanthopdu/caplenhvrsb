@@ -38,6 +38,9 @@ import {
 } from '../types';
 
 import {
+  DEFAULT_ADMIN_CONTACT_EMAIL,
+  DEFAULT_ADMIN_CONTACT_NAME,
+  DEFAULT_ADMIN_CONTACT_PHONE,
   DEFAULT_ADMIN_OPERATIONAL_CONFIG,
   DEFAULT_BP_ACCOUNTS,
   DEFAULT_BP_SYSTEM_CONFIG,
@@ -1011,6 +1014,18 @@ class Repository {
       typeof saved.permitSignLocation === 'string' && saved.permitSignLocation.trim()
         ? saved.permitSignLocation.trim()
         : DEFAULT_ORDER_SIGN_LOCATION;
+    const adminContactEmail =
+      typeof saved.adminContactEmail === 'string' && saved.adminContactEmail.trim()
+        ? saved.adminContactEmail.trim()
+        : DEFAULT_ADMIN_CONTACT_EMAIL;
+    const adminContactName =
+      typeof saved.adminContactName === 'string' && saved.adminContactName.trim()
+        ? saved.adminContactName.trim()
+        : DEFAULT_ADMIN_CONTACT_NAME;
+    const adminContactPhone =
+      typeof saved.adminContactPhone === 'string'
+        ? saved.adminContactPhone.trim()
+        : DEFAULT_ADMIN_CONTACT_PHONE;
     return {
       ...DEFAULT_ADMIN_OPERATIONAL_CONFIG,
       ...saved,
@@ -1018,12 +1033,75 @@ class Repository {
       permitSignerAuthority,
       permitSignerTitle,
       permitSignLocation,
+      adminContactEmail,
+      adminContactName,
+      adminContactPhone,
       paginationPageSize: normalizedPageSize,
       bqlChecklistConfig:
         saved.bqlChecklistConfig && saved.bqlChecklistConfig.length > 0
           ? saved.bqlChecklistConfig
           : DEFAULT_ADMIN_OPERATIONAL_CONFIG.bqlChecklistConfig,
     };
+  }
+
+  public getAdminContactConfig(): {
+    email: string;
+    emails: string[];
+    name: string;
+    phone: string;
+  } {
+    const cfg = this.getAdminConfig();
+    const rawEmail = (cfg.adminContactEmail || DEFAULT_ADMIN_CONTACT_EMAIL).trim();
+    const emails = rawEmail
+      .split(/[,;]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const normalizedEmails =
+      emails.length > 0
+        ? emails
+        : DEFAULT_ADMIN_CONTACT_EMAIL.split(',').map((item) => item.trim());
+    return {
+      email: normalizedEmails.join(', '),
+      emails: normalizedEmails,
+      name: (cfg.adminContactName || DEFAULT_ADMIN_CONTACT_NAME).trim(),
+      phone: (cfg.adminContactPhone ?? DEFAULT_ADMIN_CONTACT_PHONE).trim(),
+    };
+  }
+
+  public async syncAdminContactFromServer(): Promise<{
+    email: string;
+    emails: string[];
+    name: string;
+    phone: string;
+  }> {
+    try {
+      const res = await fetch('/api/system/admin-contact', {
+        method: 'GET',
+        credentials: 'same-origin',
+      });
+      if (!res.ok) return this.getAdminContactConfig();
+      const data = await res.json();
+      const contact = data?.contact;
+      if (contact && typeof contact.email === 'string' && contact.email.trim()) {
+        const current = this.getAdminConfig();
+        const next: AdminOperationalConfig = {
+          ...current,
+          adminContactEmail: contact.email.trim(),
+          adminContactName:
+            typeof contact.name === 'string' && contact.name.trim()
+              ? contact.name.trim()
+              : current.adminContactName,
+          adminContactPhone:
+            typeof contact.phone === 'string'
+              ? contact.phone.trim()
+              : current.adminContactPhone,
+        };
+        this.setItem(STORAGE_KEYS.ADMIN_CONFIG, next);
+      }
+    } catch {
+      // Fallback sang dữ liệu cục bộ nếu không kết nối được API
+    }
+    return this.getAdminContactConfig();
   }
 
   public getPermitSignerConfig(): {
@@ -1058,12 +1136,21 @@ class Repository {
         : DEFAULT_ORDER_SIGNER_AUTHORITY;
     const permitSignerTitle = (config.permitSignerTitle || '').trim() || DEFAULT_ORDER_SIGNER_TITLE;
     const permitSignLocation = (config.permitSignLocation || '').trim() || DEFAULT_ORDER_SIGN_LOCATION;
+    const adminContactEmail = (config.adminContactEmail || '').trim() || DEFAULT_ADMIN_CONTACT_EMAIL;
+    const adminContactName = (config.adminContactName || '').trim() || DEFAULT_ADMIN_CONTACT_NAME;
+    const adminContactPhone =
+      config.adminContactPhone !== undefined
+        ? config.adminContactPhone.trim()
+        : DEFAULT_ADMIN_CONTACT_PHONE;
     const payload: AdminOperationalConfig = {
       ...config,
       permitSignerName,
       permitSignerAuthority,
       permitSignerTitle,
       permitSignLocation,
+      adminContactEmail,
+      adminContactName,
+      adminContactPhone,
       paginationPageSize: normalizedPageSize,
     };
     this.setItem(STORAGE_KEYS.ADMIN_CONFIG, payload);
@@ -1075,7 +1162,7 @@ class Repository {
         userRole: actor.role,
         action: 'CẬP_NHẬT_CẤU_HÌNH_VẬN_HÀNH',
         targetType: 'SYSTEM',
-        details: `Cập nhật cấu hình QR thanh toán, người ký phát hành Giấy phép (${permitSignerName} - ${signerRoleSummary}, địa danh: ${permitSignLocation}), mẫu thông báo/giấy phép, checklist 8 nhóm BQL, định mức (${payload.bqlProcessingSlaMinutes}/${payload.deptProcessingSlaMinutes}/${payload.officeUploadSlaMinutes}p) và phân trang (${normalizedPageSize} bản ghi/trang).`,
+        details: `Cập nhật cấu hình QR thanh toán, người ký phát hành Giấy phép (${permitSignerName} - ${signerRoleSummary}, địa danh: ${permitSignLocation}), email liên hệ quản trị (${adminContactEmail}), mẫu thông báo/giấy phép, checklist 8 nhóm BQL, định mức (${payload.bqlProcessingSlaMinutes}/${payload.deptProcessingSlaMinutes}/${payload.officeUploadSlaMinutes}p) và phân trang (${normalizedPageSize} bản ghi/trang).`,
       });
     }
     this.emitUserMutation();

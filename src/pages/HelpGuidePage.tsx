@@ -3,11 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
-import { HelpCircle, Smartphone, Phone, ShieldCheck, Building2, Anchor } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { HelpCircle, Smartphone, Phone, Mail, ShieldCheck, Building2, Anchor } from 'lucide-react';
 import { CoastalPageHero } from '../components/CoastalPageHero';
+import { repository } from '../services/repository';
 
 export const HelpGuidePage: React.FC = () => {
+  const [adminContact, setAdminContact] = useState(() => repository.getAdminContactConfig());
+
+  useEffect(() => {
+    let active = true;
+    repository.syncAdminContactFromServer().then((contact) => {
+      if (active) setAdminContact(contact);
+    });
+    const unsub = repository.subscribe(() => {
+      setAdminContact(repository.getAdminContactConfig());
+    });
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, []);
+
   return (
     <div className="w-full mx-auto space-y-6">
       <CoastalPageHero
@@ -129,12 +146,43 @@ export const HelpGuidePage: React.FC = () => {
         </div>
       </div>
 
-      <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-slate-600">
-        <div className="flex items-center gap-2">
-          <Phone className="w-4 h-4 text-blue-600" />
-          <span>Hỗ trợ kỹ thuật 24/7: <strong>Phòng An toàn giao thông — Sở Xây dựng tỉnh Quảng Ngãi</strong></span>
+      <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs text-slate-600">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-slate-800">
+            <Phone className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>
+              Thông tin liên hệ Quản trị hệ thống:{' '}
+              <strong className="text-slate-900">{adminContact.name}</strong>
+              {adminContact.phone && (
+                <>
+                  {' '}· ĐT:{' '}
+                  <a
+                    href={`tel:${adminContact.phone.replace(/\s+/g, '')}`}
+                    className="font-mono font-bold text-blue-800 hover:underline"
+                  >
+                    {adminContact.phone}
+                  </a>
+                </>
+              )}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 pl-6">
+            <Mail className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <span>Email quản trị:</span>
+            {adminContact.emails.map((email) => (
+              <a
+                key={email}
+                href={`mailto:${email}`}
+                className="font-mono font-bold text-blue-800 bg-white hover:bg-blue-50 px-2 py-0.5 rounded border border-blue-200 transition break-all"
+              >
+                {email}
+              </a>
+            ))}
+          </div>
         </div>
-        <span className="font-semibold text-slate-800">Tuyến Đảo Lớn – Đảo Bé · Đặc khu Lý Sơn</span>
+        <span className="font-semibold text-slate-800 shrink-0">
+          Tuyến Đảo Lớn – Đảo Bé · Đặc khu Lý Sơn
+        </span>
       </div>
     </div>
   );

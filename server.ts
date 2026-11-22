@@ -536,6 +536,100 @@ export async function createApp(options: CreateAppOptions = {}) {
     });
   };
 
+  // =========================================================================
+  // CẤU HÌNH THÔNG TIN LIÊN HỆ QUẢN TRỊ HỆ THỐNG (ĐỒNG BỘ TOÀN SERVER)
+  // =========================================================================
+  const systemConfigDir = path.join(
+    options.dossierStorageDir || path.join(__dirname, 'CAPLENHVAORA'),
+    '_system_config'
+  );
+  const adminContactFilePath = path.join(systemConfigDir, 'admin-contact.json');
+  const DEFAULT_SERVER_ADMIN_CONTACT = {
+    email: 'pvtho@pdu.edu.vn, pvantho@gmail.com',
+    name: 'Phòng An toàn giao thông — Sở Xây dựng tỉnh Quảng Ngãi',
+    phone: '0914 000 001',
+  };
+  const EMAIL_REGEX = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/;
+
+  const readServerAdminContact = () => {
+    try {
+      if (fs.existsSync(adminContactFilePath)) {
+        const raw = fs.readFileSync(adminContactFilePath, 'utf8');
+        const parsed = JSON.parse(raw) as {
+          email?: string;
+          name?: string;
+          phone?: string;
+          updatedAt?: string;
+        };
+        if (typeof parsed.email === 'string' && parsed.email.trim()) {
+          return {
+            email: parsed.email.trim(),
+            name:
+              typeof parsed.name === 'string' && parsed.name.trim()
+                ? parsed.name.trim()
+                : DEFAULT_SERVER_ADMIN_CONTACT.name,
+            phone:
+              typeof parsed.phone === 'string'
+                ? parsed.phone.trim()
+                : DEFAULT_SERVER_ADMIN_CONTACT.phone,
+            updatedAt: parsed.updatedAt || null,
+          };
+        }
+      }
+    } catch {
+      // fallback default
+    }
+    return { ...DEFAULT_SERVER_ADMIN_CONTACT, updatedAt: null };
+  };
+
+  app.get('/api/system/admin-contact', (_req: Request, res: Response) => {
+    return res.json({ success: true, contact: readServerAdminContact() });
+  });
+
+  app.put(
+    '/api/system/admin-contact',
+    requireActiveSession,
+    requireMutationCsrfCheck,
+    (req: Request, res: Response) => {
+      try {
+        const rawEmail = typeof req.body?.email === 'string' ? req.body.email.trim().slice(0, 240) : '';
+        const rawName = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 180) : '';
+        const rawPhone = typeof req.body?.phone === 'string' ? req.body.phone.trim().slice(0, 40) : '';
+
+        const parsedEmails: string[] = rawEmail
+          .split(/[,;]+/)
+          .map((item: string) => item.trim())
+          .filter(Boolean);
+
+        if (parsedEmails.length === 0 || parsedEmails.some((addr: string) => !EMAIL_REGEX.test(addr))) {
+          return res.status(400).json({
+            success: false,
+            error: 'INVALID_ADMIN_EMAIL',
+            message: 'Email quản trị hệ thống không hợp lệ. Vui lòng nhập đúng định dạng email.',
+          });
+        }
+
+        const payload = {
+          email: parsedEmails.join(', '),
+          name: rawName || DEFAULT_SERVER_ADMIN_CONTACT.name,
+          phone: rawPhone,
+          updatedAt: new Date().toISOString(),
+          updatedByEmail: (req as any).authSession?.email || '',
+        };
+
+        fs.mkdirSync(systemConfigDir, { recursive: true });
+        fs.writeFileSync(adminContactFilePath, JSON.stringify(payload, null, 2), 'utf8');
+
+        return res.json({ success: true, contact: payload });
+      } catch (err: any) {
+        return res.status(500).json({
+          success: false,
+          error: err?.message || 'Không thể lưu cấu hình email quản trị trên máy chủ.',
+        });
+      }
+    }
+  );
+
   app.use('/api/dossiers', requireActiveSession, requireMutationCsrfCheck);
 
   // 1. Thống kê toàn bộ thư mục hồ sơ đang lưu trên Server

@@ -585,6 +585,10 @@ export const DEFAULT_ORDER_SIGNER_AUTHORITY = 'KT. GIÁM ĐỐC';
 export const DEFAULT_ORDER_SIGNER_TITLE = 'PHÓ GIÁM ĐỐC';
 export const DEFAULT_ORDER_SIGN_LOCATION = 'Quảng Ngãi';
 
+export const DEFAULT_ADMIN_CONTACT_EMAIL = 'pvtho@pdu.edu.vn, pvantho@gmail.com';
+export const DEFAULT_ADMIN_CONTACT_NAME = 'Phòng An toàn giao thông — Sở Xây dựng tỉnh Quảng Ngãi';
+export const DEFAULT_ADMIN_CONTACT_PHONE = '0914 000 001';
+
 export const DEFAULT_ADMIN_OPERATIONAL_CONFIG: AdminOperationalConfig = {
   paymentQrImageUrl: DEFAULT_PAYMENT_QR_SVG,
   paymentQrBankName: 'Vietcombank - Chi nhánh Quảng Ngãi',
@@ -595,6 +599,9 @@ export const DEFAULT_ADMIN_OPERATIONAL_CONFIG: AdminOperationalConfig = {
   permitSignerAuthority: DEFAULT_ORDER_SIGNER_AUTHORITY,
   permitSignerTitle: DEFAULT_ORDER_SIGNER_TITLE,
   permitSignLocation: DEFAULT_ORDER_SIGN_LOCATION,
+  adminContactEmail: DEFAULT_ADMIN_CONTACT_EMAIL,
+  adminContactName: DEFAULT_ADMIN_CONTACT_NAME,
+  adminContactPhone: DEFAULT_ADMIN_CONTACT_PHONE,
   approvalNoticeTemplate:
     'THÔNG BÁO CHẤP THUẬN HỒ SƠ ĐỀ NGHỊ CẤP PHÉP RỜI CẢNG, BẾN\nBan Quản lý cảng xác nhận đã kiểm tra thực tế phương tiện {{tenTau}} ({{soDangKy}}), hồ sơ {{maHoSo}} đủ điều kiện an toàn và đã hoàn thành nghĩa vụ nộp phí, kính chuyển Sở Xây dựng xem xét cấp Giấy phép rời cảng.',
   permitDraftTemplate:

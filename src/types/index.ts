@@ -967,6 +967,9 @@ export interface AdminOperationalConfig {
   permitSignerAuthority?: string;     // Dòng quyền hạn ký (VD: KT. GIÁM ĐỐC; để trống nếu Giám đốc ký trực tiếp)
   permitSignerTitle?: string;         // Chức danh người ký (VD: PHÓ GIÁM ĐỐC hoặc GIÁM ĐỐC)
   permitSignLocation?: string;        // Địa danh ký ban hành (mặc định: Quảng Ngãi)
+  adminContactEmail?: string;         // Email quản trị hệ thống hiển thị trong thông tin liên hệ (hỗ trợ nhiều email ngăn cách dấu phẩy)
+  adminContactName?: string;          // Tên đầu mối / đơn vị quản trị hệ thống
+  adminContactPhone?: string;         // Số điện thoại liên hệ quản trị hệ thống (tùy chọn)
   approvalNoticeTemplate: string;
   permitDraftTemplate: string;
   bqlProcessingSlaMinutes: number;    // Mặc định 60 phút

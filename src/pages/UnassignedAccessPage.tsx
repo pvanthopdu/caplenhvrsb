@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserAccount } from '../types';
-import { SUPER_ADMIN_EMAILS } from '../services/firebaseAuthService';
+import { repository } from '../services/repository';
 import {
   ShieldAlert,
   Lock,
   Mail,
+  Phone,
   RefreshCw,
   LogOut,
   CheckCircle2,
@@ -29,6 +30,21 @@ export const UnassignedAccessPage: React.FC<UnassignedAccessPageProps> = ({
 }) => {
   const [checking, setChecking] = useState(false);
   const [checkedNotice, setCheckedNotice] = useState('');
+  const [adminContact, setAdminContact] = useState(() => repository.getAdminContactConfig());
+
+  useEffect(() => {
+    let active = true;
+    repository.syncAdminContactFromServer().then((contact) => {
+      if (active) setAdminContact(contact);
+    });
+    const unsub = repository.subscribe(() => {
+      setAdminContact(repository.getAdminContactConfig());
+    });
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, []);
 
   const isLocked = currentUser.status === 'LOCKED';
 
@@ -130,18 +146,39 @@ export const UnassignedAccessPage: React.FC<UnassignedAccessPageProps> = ({
         </div>
 
         {/* Admin Contact Info */}
-        <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-950 space-y-1">
+        <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl text-xs text-blue-950 space-y-2">
           <p className="font-bold flex items-center gap-1.5">
             <Mail className="w-4 h-4 text-blue-600 shrink-0" />
             Thông tin liên hệ Quản trị hệ thống:
           </p>
-          <p className="text-blue-900">
-            Vui lòng liên hệ quản trị viên{' '}
-            <strong className="font-mono bg-white px-1.5 py-0.5 rounded border border-blue-200">
-              {SUPER_ADMIN_EMAILS.join(' hoặc ')}
-            </strong>{' '}
+          <p className="text-blue-900 leading-relaxed">
+            Vui lòng liên hệ{' '}
+            <span className="font-semibold">{adminContact.name}</span> qua email{' '}
+            {adminContact.emails.map((email, idx) => (
+              <React.Fragment key={email}>
+                {idx > 0 && ' hoặc '}
+                <a
+                  href={`mailto:${email}`}
+                  className="inline-block font-mono font-bold bg-white hover:bg-blue-100/70 text-blue-900 px-1.5 py-0.5 rounded border border-blue-200 transition break-all"
+                >
+                  {email}
+                </a>
+              </React.Fragment>
+            ))}{' '}
             để được cấp vai trò truy cập (Chuyên viên, Trưởng phòng, Lãnh đạo, BQL Cảng, Văn thư hoặc Thuyền trưởng).
           </p>
+          {adminContact.phone && (
+            <p className="text-blue-900 flex items-center gap-1.5 pt-1 border-t border-blue-200/70">
+              <Phone className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <span>Điện thoại hỗ trợ:</span>
+              <a
+                href={`tel:${adminContact.phone.replace(/\s+/g, '')}`}
+                className="font-mono font-bold text-blue-950 hover:underline"
+              >
+                {adminContact.phone}
+              </a>
+            </p>
+          )}
         </div>
 
         {checkedNotice && (

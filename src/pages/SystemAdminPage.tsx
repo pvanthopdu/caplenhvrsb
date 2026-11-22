@@ -39,16 +39,22 @@ import {
   RefreshCw,
   Loader2,
   FileSignature,
+  Mail,
+  Phone,
 } from 'lucide-react';
 import {
   DEFAULT_ORDER_SIGNER_AUTHORITY,
   DEFAULT_ORDER_SIGNER_NAME,
   DEFAULT_ORDER_SIGNER_TITLE,
   DEFAULT_ORDER_SIGN_LOCATION,
+  DEFAULT_ADMIN_CONTACT_EMAIL,
+  DEFAULT_ADMIN_CONTACT_NAME,
+  DEFAULT_ADMIN_CONTACT_PHONE,
 } from '../config/systemDefaults';
 import { CoastalPageHero } from '../components/CoastalPageHero';
 import { PaginationBar, usePagination } from '../components/PaginationBar';
 import { dossierArchiveService, ServerDossiersOverview } from '../services/dossierArchiveService';
+import { sessionManager } from '../services/sessionManager';
 
 interface SystemAdminPageProps {
   currentUser: UserAccount;
@@ -69,6 +75,7 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
     repository.getAdminConfig()
   );
   const [adminConfigSavedMsg, setAdminConfigSavedMsg] = useState<string>('');
+  const [adminConfigErrorMsg, setAdminConfigErrorMsg] = useState<string>('');
   const qrFileInputRef = useRef<HTMLInputElement>(null);
   const personalAccessLogs = repository.getPersonalDataAccessLogs();
   const auditPagination = usePagination(auditLogs, activeTab);
@@ -139,6 +146,9 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
 
   useEffect(() => {
     refreshStorageMetrics();
+    repository.syncAdminContactFromServer().then(() => {
+      setAdminConfig(repository.getAdminConfig());
+    });
     const unsub = repository.subscribe(() => {
       setStorageDiag(repository.getStorageDiagnostics());
     });
@@ -269,8 +279,33 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
     reader.readAsDataURL(file);
   };
 
-  const handleSaveAdminConfig = (e: React.FormEvent) => {
+  const handleSaveAdminConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAdminConfigErrorMsg('');
+    setAdminConfigSavedMsg('');
+
+    const EMAIL_REGEX = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}$/;
+    const rawEmailInput = (adminConfig.adminContactEmail ?? DEFAULT_ADMIN_CONTACT_EMAIL).trim();
+    const parsedEmails = rawEmailInput
+      .split(/[,;]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (parsedEmails.length === 0 || parsedEmails.some((addr) => !EMAIL_REGEX.test(addr))) {
+      setAdminConfigErrorMsg(
+        'Email quản trị hệ thống không hợp lệ. Vui lòng nhập đúng định dạng email (nhiều email ngăn cách bằng dấu phẩy).'
+      );
+      return;
+    }
+
+    const adminContactEmail = parsedEmails.join(', ');
+    const adminContactName =
+      (adminConfig.adminContactName || '').trim() || DEFAULT_ADMIN_CONTACT_NAME;
+    const adminContactPhone =
+      adminConfig.adminContactPhone !== undefined
+        ? adminConfig.adminContactPhone.trim()
+        : DEFAULT_ADMIN_CONTACT_PHONE;
+
     const normalizedPageSize = Math.min(
       200,
       Math.max(5, Math.floor(Number(adminConfig.paginationPageSize) || 15))
@@ -291,6 +326,9 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
       permitSignerAuthority,
       permitSignerTitle,
       permitSignLocation,
+      adminContactEmail,
+      adminContactName,
+      adminContactPhone,
       bqlProcessingSlaMinutes: Math.max(5, Number(adminConfig.bqlProcessingSlaMinutes) || 60),
       deptProcessingSlaMinutes: Math.max(5, Number(adminConfig.deptProcessingSlaMinutes) || 60),
       officeUploadSlaMinutes: Math.max(1, Number(adminConfig.officeUploadSlaMinutes) || 10),
@@ -298,15 +336,40 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
     };
     repository.saveAdminConfig(normalized, currentUser);
     setAdminConfig(normalized);
+
+    let syncedToServer = false;
+    try {
+      const res = await fetch('/api/system/admin-contact', {
+        method: 'PUT',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          ...sessionManager.getSessionHeaders(),
+        },
+        body: JSON.stringify({
+          email: adminContactEmail,
+          name: adminContactName,
+          phone: adminContactPhone,
+        }),
+      });
+      if (res.status === 401) {
+        sessionManager.handleUnauthorizedResponse();
+      } else if (res.ok) {
+        syncedToServer = true;
+      }
+    } catch {
+      // Ngoại tuyến: vẫn đã lưu cấu hình cục bộ thành công
+    }
+
     setAdminConfigSavedMsg(
-      `Đã lưu cấu hình vận hành! Người ký phát hành Giấy phép: ${permitSignerName} (${[
-        permitSignerAuthority,
-        permitSignerTitle,
-      ]
+      `Đã lưu cấu hình vận hành! Email quản trị: ${adminContactEmail}${
+        syncedToServer ? ' (đã đồng bộ toàn hệ thống)' : ''
+      }; Người ký GP: ${permitSignerName} (${[permitSignerAuthority, permitSignerTitle]
         .filter(Boolean)
         .join(' / ')}), phân trang ${normalizedPageSize} bản ghi/trang.`
     );
-    setTimeout(() => setAdminConfigSavedMsg(''), 5000);
+    setTimeout(() => setAdminConfigSavedMsg(''), 6000);
   };
 
   // Ma trận phân quyền chuẩn 7 nhóm vai trò (không duyệt trên app với TP/LĐ; BP kiểm soát cuối cùng)
@@ -434,7 +497,7 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                     Cấu hình vận hành nghiệp vụ (Mục 2, 3, 4 &amp; 8)
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    Quản trị mã QR nộp phí do Sở cung cấp, người ký phát hành Giấy phép rời cảng, định mức 60/60/10 phút, mẫu Thông báo chấp thuận / dự thảo Giấy phép và danh mục kiểm tra 8 nhóm của BQL Cảng.
+                    Quản trị mã QR nộp phí do Sở cung cấp, người ký phát hành Giấy phép rời cảng, email &amp; thông tin liên hệ quản trị hệ thống, định mức 60/60/10 phút, mẫu văn bản và danh mục kiểm tra 8 nhóm của BQL Cảng.
                   </p>
                 </div>
                 <button
@@ -444,6 +507,13 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                   Lưu cấu hình vận hành
                 </button>
               </div>
+
+              {adminConfigErrorMsg && (
+                <div className="p-3 bg-red-50 border border-red-300 rounded-xl text-red-900 font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{adminConfigErrorMsg}</span>
+                </div>
+              )}
 
               {adminConfigSavedMsg && (
                 <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-900 font-bold flex items-center gap-2">
@@ -685,10 +755,122 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                 </div>
               </div>
 
-              {/* 3. Định mức thời gian 60 / 60 / 10 & Tham số phân trang */}
+              {/* 3. Cấu hình Thông tin liên hệ Quản trị hệ thống (Email & Hỗ trợ) */}
+              <div className="p-4 rounded-2xl bg-white border border-blue-200 shadow-2xs space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="font-extrabold text-[#07244d] uppercase text-[11px] flex items-center gap-1.5">
+                    <Mail className="w-4 h-4 text-blue-600" />
+                    3. Cấu hình Email &amp; Thông tin liên hệ Quản trị hệ thống
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAdminConfig({
+                        ...adminConfig,
+                        adminContactEmail: DEFAULT_ADMIN_CONTACT_EMAIL,
+                        adminContactName: DEFAULT_ADMIN_CONTACT_NAME,
+                        adminContactPhone: DEFAULT_ADMIN_CONTACT_PHONE,
+                      })
+                    }
+                    className="text-[11px] font-bold text-blue-700 hover:text-blue-900 underline cursor-pointer"
+                  >
+                    Khôi phục mặc định
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
+                  <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Email quản trị hệ thống (*)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder={DEFAULT_ADMIN_CONTACT_EMAIL}
+                        value={adminConfig.adminContactEmail ?? DEFAULT_ADMIN_CONTACT_EMAIL}
+                        onChange={(e) => {
+                          setAdminConfigErrorMsg('');
+                          setAdminConfig({ ...adminConfig, adminContactEmail: e.target.value });
+                        }}
+                        className="w-full px-3 py-2 border border-blue-300 bg-blue-50/30 rounded-xl font-mono font-bold text-[#07244d]"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Hiển thị trong mục &ldquo;Thông tin liên hệ Quản trị hệ thống&rdquo; (màn hình chờ phân quyền &amp; trang Hướng dẫn). Có thể nhập nhiều email, ngăn cách bởi dấu phẩy (,).
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Đầu mối / Đơn vị quản trị
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={DEFAULT_ADMIN_CONTACT_NAME}
+                        value={adminConfig.adminContactName ?? DEFAULT_ADMIN_CONTACT_NAME}
+                        onChange={(e) =>
+                          setAdminConfig({ ...adminConfig, adminContactName: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white font-semibold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">
+                        Số điện thoại hỗ trợ (tùy chọn)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={DEFAULT_ADMIN_CONTACT_PHONE}
+                        value={adminConfig.adminContactPhone ?? DEFAULT_ADMIN_CONTACT_PHONE}
+                        onChange={(e) =>
+                          setAdminConfig({ ...adminConfig, adminContactPhone: e.target.value })
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl bg-white font-mono font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Khung xem trước khối Thông tin liên hệ Quản trị hệ thống */}
+                  <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-200 text-xs text-blue-950 flex flex-col justify-between space-y-2">
+                    <div className="space-y-1.5">
+                      <p className="text-[10px] font-extrabold uppercase tracking-wider text-blue-800 border-b border-blue-200 pb-1">
+                        Xem trước hiển thị cho người dùng
+                      </p>
+                      <p className="font-bold flex items-center gap-1.5 text-blue-950">
+                        <Mail className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        Thông tin liên hệ Quản trị hệ thống:
+                      </p>
+                      <p className="text-[11px] text-blue-900 leading-relaxed">
+                        {(adminConfig.adminContactName || DEFAULT_ADMIN_CONTACT_NAME).trim()}
+                      </p>
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        {(adminConfig.adminContactEmail || DEFAULT_ADMIN_CONTACT_EMAIL)
+                          .split(/[,;]+/)
+                          .map((item) => item.trim())
+                          .filter(Boolean)
+                          .map((addr) => (
+                            <span
+                              key={addr}
+                              className="font-mono text-[11px] font-bold bg-white px-2 py-0.5 rounded border border-blue-200 text-blue-900 break-all"
+                            >
+                              {addr}
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                    {(adminConfig.adminContactPhone ?? '').trim() && (
+                      <p className="text-[11px] font-semibold text-blue-900 flex items-center gap-1.5 pt-1 border-t border-blue-200/80">
+                        <Phone className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span>{(adminConfig.adminContactPhone ?? '').trim()}</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Định mức thời gian 60 / 60 / 10 & Tham số phân trang */}
               <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
                 <h4 className="font-extrabold text-[#07244d] uppercase text-[11px]">
-                  3. Định mức thời gian xử lý chuẩn (SLA) &amp; Tham số phân trang hệ thống
+                  4. Định mức thời gian xử lý chuẩn (SLA) &amp; Tham số phân trang hệ thống
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <div>
@@ -766,11 +948,11 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
                 </div>
               </div>
 
-              {/* 4. Mẫu văn bản & 5. Danh mục 8 nhóm kiểm tra BQL */}
+              {/* 5. Mẫu văn bản & 6. Danh mục 8 nhóm kiểm tra BQL */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
                   <h4 className="font-extrabold text-[#07244d] uppercase text-[11px]">
-                    4. Mẫu Thông báo chấp thuận &amp; Dự thảo Giấy phép
+                    5. Mẫu Thông báo chấp thuận &amp; Dự thảo Giấy phép
                   </h4>
                   <div>
                     <label className="block font-bold text-slate-700 mb-1">Mẫu Thông báo BQL Cảng</label>
@@ -798,7 +980,7 @@ export const SystemAdminPage: React.FC<SystemAdminPageProps> = ({ currentUser, o
 
                 <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-2.5">
                   <h4 className="font-extrabold text-[#07244d] uppercase text-[11px]">
-                    5. Danh mục kiểm tra 8 nhóm tại bến ({adminConfig.bqlChecklistConfig.length} mục)
+                    6. Danh mục kiểm tra 8 nhóm tại bến ({adminConfig.bqlChecklistConfig.length} mục)
                   </h4>
                   <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
                     {adminConfig.bqlChecklistConfig.map((item, idx) => (
