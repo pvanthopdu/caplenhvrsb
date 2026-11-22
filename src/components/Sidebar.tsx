@@ -168,9 +168,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         {
           id: 'duty-schedule',
-          label: 'Lịch ca trực (BQL · Sở · BP)',
+          label: 'Quản lý ca trực (BQL · Sở · BP)',
           icon: CalendarCheck,
-          roles: ['ADMIN', 'LEADER', 'DEPT_HEAD', 'OFFICER', 'PORT_STAFF', 'BP_CHIHUY', 'DUTY_OFFICER'],
+          roles: ['ADMIN', 'LEADER', 'DEPT_HEAD', 'OFFICER', 'PORT_STAFF', 'BP_CHIHUY', 'BP_TRUC', 'DUTY_OFFICER'],
         },
         {
           id: 'reports',

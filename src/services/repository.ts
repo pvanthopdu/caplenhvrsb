@@ -67,6 +67,7 @@ import {
   KpiTimeExclusion,
 } from '../types/kpi';
 import { DEFAULT_KPI_CONFIG } from './kpiEngine';
+import { sessionManager } from './sessionManager';
 import {
   getRequiredPortIdForTripAction,
   getUserAccessibleVesselIds,
@@ -1198,6 +1199,91 @@ class Repository {
     this.emitUserMutation();
   }
 
+  public async syncDutyShiftsFromServer(): Promise<DutyShift[]> {
+    try {
+      const res = await fetch('/api/system/duty-shifts', {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          ...sessionManager.getSessionHeaders(),
+        },
+      });
+      if (res.status === 401) {
+        sessionManager.handleUnauthorizedResponse();
+        return this.getDutyShifts();
+      }
+      if (!res.ok) return this.getDutyShifts();
+      const data = await res.json();
+      if (data?.success && data.initialized && Array.isArray(data.shifts)) {
+        this.setItem(STORAGE_KEYS.SHIFTS, data.shifts as DutyShift[]);
+        return data.shifts as DutyShift[];
+      }
+    } catch {
+      // Ngoại tuyến: sử dụng dữ liệu cục bộ
+    }
+    return this.getDutyShifts();
+  }
+
+  public async saveDutyShiftWithSync(
+    shift: DutyShift,
+    isEdit: boolean
+  ): Promise<{ syncedToServer: boolean; error?: string }> {
+    this.saveDutyShift(shift);
+    try {
+      const url = isEdit
+        ? `/api/system/duty-shifts/${encodeURIComponent(shift.id)}`
+        : '/api/system/duty-shifts';
+      const res = await fetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          ...sessionManager.getSessionHeaders(),
+        },
+        body: JSON.stringify(shift),
+      });
+      if (res.status === 401) {
+        sessionManager.handleUnauthorizedResponse();
+        return { syncedToServer: false };
+      }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        return { syncedToServer: false, error: errData?.message };
+      }
+      return { syncedToServer: true };
+    } catch {
+      return { syncedToServer: false };
+    }
+  }
+
+  public async deleteDutyShiftWithSync(
+    shiftId: string
+  ): Promise<{ syncedToServer: boolean; error?: string }> {
+    this.deleteDutyShift(shiftId);
+    try {
+      const res = await fetch(`/api/system/duty-shifts/${encodeURIComponent(shiftId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          ...sessionManager.getSessionHeaders(),
+        },
+      });
+      if (res.status === 401) {
+        sessionManager.handleUnauthorizedResponse();
+        return { syncedToServer: false };
+      }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        return { syncedToServer: false, error: errData?.message };
+      }
+      return { syncedToServer: true };
+    } catch {
+      return { syncedToServer: false };
+    }
+  }
+
   /**
    * Tài khoản cán bộ Biên phòng (BP_TRUC / BP_CHIHUY) đăng nhập thành công bằng email
    * sẽ tự động được ghi nhận là đang đăng ca trực trong ngày.
@@ -1334,6 +1420,7 @@ class Repository {
     const normalizedEmail = (user.email || '').trim().toLowerCase();
     const shifts = this.getDutyShifts();
     const matched = shifts.find((s) => {
+      if (s.status === 'COMPLETED') return false;
       if (!this.isTimeInShiftWindow(s, now)) return false;
       if (s.roleGroup && s.roleGroup !== expectedGroup) return false;
       const inAssignees = Boolean(
@@ -1354,31 +1441,25 @@ class Repository {
 
     if (matched) return matched;
 
-    // Cán bộ Biên phòng đăng nhập thành công bằng email = tự động đăng ca trực
-    if (
-      (user.role === 'BP_TRUC' || user.role === 'BP_CHIHUY') &&
-      user.status !== 'LOCKED' &&
-      user.isActive !== false
-    ) {
-      const activeUser = this.getCurrentUser();
-      const isSignedInUser =
-        !activeUser ||
-        activeUser.id === user.id ||
-        (Boolean(normalizedEmail) &&
-          (activeUser.email || '').trim().toLowerCase() === normalizedEmail);
-      if (isSignedInUser) {
-        return this.ensureBpLoginDutyShift(user, now);
-      }
-    }
-
     return undefined;
   }
 
+  /**
+   * Kiểm tra quyền xử lý hồ sơ theo vai trò & bến phụ trách của tài khoản đã đăng nhập.
+   * Không chặn theo ca trực: người dùng đăng nhập thành công được xử lý hồ sơ theo đúng quyền.
+   * Nếu tài khoản đang có ca trực trùng khung giờ thì vẫn trả kèm `shift` để ghi nhật ký.
+   */
   public validateShiftAndPortForAction(
     user: UserAccount,
     requiredPortId?: string,
     now: Date = new Date()
   ): { allowed: boolean; shift?: DutyShift; reason?: string } {
+    if (user.status === 'LOCKED' || user.isActive === false) {
+      return {
+        allowed: false,
+        reason: 'Tài khoản của bạn hiện đang bị khóa hoặc ngừng hoạt động.',
+      };
+    }
     if (user.role === 'ADMIN') {
       return { allowed: true };
     }
@@ -1388,16 +1469,9 @@ class Repository {
     }
 
     const activeShift = this.getActiveShiftForUser(user, now);
-    if (!activeShift) {
-      return {
-        allowed: false,
-        reason:
-          'Tài khoản của bạn hiện KHÔNG nằm trong ca trực đang hoạt động (chế độ chỉ đọc). Chỉ cán bộ trong ca trực mới được thao tác.',
-      };
-    }
 
     if ((expectedGroup === 'BQL_CANG' || expectedGroup === 'BIEN_PHONG') && requiredPortId) {
-      const userPort = activeShift.portId || getUserAssignedPortId(user);
+      const userPort = getUserAssignedPortId(user);
       if (userPort && userPort !== requiredPortId) {
         const portLabel = userPort === 'PORT-01' ? 'Đảo Lớn (Bến Lý Sơn)' : 'Đảo Bé (Bến An Bình)';
         return {
@@ -1412,8 +1486,8 @@ class Repository {
   }
 
   /**
-   * Kiểm tra chặt chẽ một hồ sơ có phải là nhiệm vụ cần xử lý trực tiếp của tài khoản đang đăng nhập hay không
-   * (kiểm tra đồng thời: vai trò, phương tiện/bến phụ trách, và ca trực đang hoạt động).
+   * Kiểm tra một hồ sơ có phải là nhiệm vụ cần xử lý trực tiếp của tài khoản đang đăng nhập hay không
+   * (kiểm tra theo vai trò và phương tiện/bến phụ trách — không giới hạn theo ca trực).
    */
   public isTripMyAction(
     user: UserAccount,
@@ -1429,8 +1503,9 @@ class Repository {
     }
 
     const requiredPortId = getRequiredPortIdForTripAction(user.role, trip);
-    const shiftCheck = this.validateShiftAndPortForAction(user, requiredPortId, now);
-    return isTripMyActionTask(user, trip, { isInActiveShift: shiftCheck.allowed });
+    const portCheck = this.validateShiftAndPortForAction(user, requiredPortId, now);
+    if (!portCheck.allowed) return false;
+    return isTripMyActionTask(user, trip);
   }
 
   /**
@@ -2468,7 +2543,7 @@ class Repository {
   public recordDeptWeatherCheck(
     tripId: string,
     actor: UserAccount,
-    data: {
+    data?: {
       isSafe: boolean;
       windForceBeaufort: number;
       waveHeightMeters: number;
@@ -2482,22 +2557,58 @@ class Repository {
     const shiftCheck = this.validateShiftAndPortForAction(actor);
     if (!shiftCheck.allowed) return { success: false, error: shiftCheck.reason };
 
+    // Không cho phép chỉnh sửa sau khi đã ghi nhận tự động
+    if (trip.weatherCheckRecord) {
+      return {
+        success: false,
+        trip,
+        error:
+          'Kết quả kiểm tra thời tiết tại thời điểm xét cấp phép đã được ghi nhận tự động và khóa, không cho phép chỉnh sửa.',
+      };
+    }
+
+    const weather = this.getWeather();
+    const vessel = this.getVesselById(trip.vesselId);
+    const maxWind = vessel?.maxWindForce ?? 6;
+    const maxWave = vessel?.maxWaveHeight ?? 2.0;
+
+    const windForceBeaufort = data ? data.windForceBeaufort : weather.windForceBeaufort;
+    const waveHeightMeters = data ? data.waveHeightMeters : weather.waveHeightMeters;
+    const visibilityKm = data ? data.visibilityKm : (weather.visibilityKm ?? 10);
+    const forecastNote = data
+      ? data.forecastNote
+      : weather.forecastNext24h ||
+        `Thời tiết thời gian thực tuyến Lý Sơn: gió cấp ${weather.windForceBeaufort} (${weather.windDirection || 'Đông Bắc'}), sóng ${weather.waveHeightMeters}m.`;
+    const isSafe = data
+      ? data.isSafe
+      : !weather.isRouteSuspended &&
+        windForceBeaufort <= maxWind &&
+        waveHeightMeters <= maxWave;
+
     const nowIso = new Date().toISOString();
     trip.weatherCheckRecord = {
       checkedAt: nowIso,
       checkedById: actor.id,
       checkedByName: actor.fullName,
-      ...data,
+      area: weather.area || 'Tuyến Đảo Lớn – Đảo Bé (Đặc khu Lý Sơn)',
+      isSafe,
+      isRouteSuspended: Boolean(weather.isRouteSuspended),
+      conclusion: isSafe ? 'AN_TOAN' : 'KHONG_AN_TOAN',
+      windForceBeaufort,
+      waveHeightMeters,
+      visibilityKm,
+      forecastNote,
     };
 
-    const weather = this.getWeather();
-    weather.windForceBeaufort = data.windForceBeaufort;
-    weather.waveHeightMeters = data.waveHeightMeters;
-    weather.visibilityKm = data.visibilityKm;
-    weather.forecastNext24h = data.forecastNote;
-    weather.recordedAt = nowIso;
-    weather.recordedBy = actor.fullName;
-    this.saveWeather(weather);
+    if (data) {
+      weather.windForceBeaufort = data.windForceBeaufort;
+      weather.waveHeightMeters = data.waveHeightMeters;
+      weather.visibilityKm = data.visibilityKm;
+      weather.forecastNext24h = data.forecastNote;
+      weather.recordedAt = nowIso;
+      weather.recordedBy = actor.fullName;
+      this.saveWeather(weather);
+    }
 
     const saved = this.saveTrip(trip);
     this.addAuditLog({
@@ -2507,7 +2618,7 @@ class Repository {
       action: 'CHUYÊN_VIÊN_KIỂM_TRA_THỜI_TIẾT',
       targetId: saved.id,
       targetType: 'WEATHER',
-      details: `Kiểm tra thời tiết hồ sơ ${saved.tripNumber}: Gió cấp ${data.windForceBeaufort}, sóng ${data.waveHeightMeters}m (${data.isSafe ? 'An toàn' : 'Nguy hiểm'}).`,
+      details: `Ghi nhận tự động thời tiết thời gian thực hồ sơ ${saved.tripNumber}: Gió cấp ${windForceBeaufort}, sóng ${waveHeightMeters}m, tầm nhìn ${visibilityKm}km (${isSafe ? 'An toàn' : 'Nguy hiểm'}) — người thực hiện: ${actor.fullName}.`,
     });
 
     return { success: true, trip: saved };

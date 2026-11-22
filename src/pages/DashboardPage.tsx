@@ -360,8 +360,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   }`}
                 >
                   {shiftCheck.allowed
-                    ? `Trong ca: ${shiftCheck.shift?.shiftName || 'Đang trực'}`
-                    : 'Ngoài ca trực (Chỉ xem)'}
+                    ? shiftCheck.shift
+                      ? `Trong ca: ${shiftCheck.shift.shiftName}`
+                      : 'Sẵn sàng xử lý theo quyền'
+                    : shiftCheck.reason || 'Chế độ chỉ xem'}
                 </span>
               )}
               <div className="hidden md:flex items-center gap-2 bg-[#00409c]/45 px-3 py-1 rounded-full border border-white/20 backdrop-blur-xs">
@@ -658,9 +660,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 </span>
               </div>
               <p className="text-xs text-emerald-700 font-medium">
-                {['PORT_STAFF', 'OFFICER', 'BP_TRUC', 'BP_CHIHUY'].includes(currentUser.role) && !shiftCheck.allowed
-                  ? 'Tài khoản đang ngoài ca trực (chế độ chỉ xem). Bạn có thể xem hồ sơ liên quan và cán bộ đang phụ trách ở mục bên cạnh.'
-                  : 'Chỉ các hồ sơ thuộc đúng trách nhiệm xử lý của tài khoản này mới hiển thị tại đây.'}
+                Chỉ các hồ sơ thuộc đúng vai trò và bến phụ trách của tài khoản này mới hiển thị tại đây.
               </p>
               {relatedTasks.length > 0 && (
                 <div className="pt-1">

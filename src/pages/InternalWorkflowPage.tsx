@@ -38,10 +38,19 @@ import {
   MapPin,
   FileWarning,
   Ban,
+  ArrowLeft,
+  ArrowRight,
+  Search,
+  UserCheck,
+  Wind,
+  Waves,
+  Compass,
 } from 'lucide-react';
 import { OfficialFormsModal, OfficialFormTab } from '../components/OfficialFormsModal';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { DigitalOrderA4 } from '../components/DigitalOrderA4';
+import { CoastalPageHero } from '../components/CoastalPageHero';
+import { PaginationBar, usePagination } from '../components/PaginationBar';
 import {
   triggerPrintOrder,
   downloadOrderWord,
@@ -66,6 +75,23 @@ const DEPT_QUEUE_STATUSES = [
   'OFFICE_TRA_LAI',
   'DA_CAP_PHEP',
   'TAM_GIU_BIEN_PHONG',
+];
+
+const DEPT_ACTIONABLE_STATUSES = [
+  'DA_CHAP_THUAN',
+  'CHO_SO_XU_LY',
+  'OFFICE_TRA_LAI',
+  'DA_DUYET',
+  'DANG_TRINH_OFFICE',
+  'TAM_DUNG_THOI_TIET',
+  'TAM_GIU_BIEN_PHONG',
+];
+
+const AUTO_WEATHER_CAPTURE_STATUSES = [
+  'DA_CHAP_THUAN',
+  'CHO_SO_XU_LY',
+  'OFFICE_TRA_LAI',
+  'TAM_DUNG_THOI_TIET',
 ];
 
 function toDatetimeLocalValue(iso?: string): string {
@@ -99,6 +125,7 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
   const trips = repository.getTrips();
   const weather = repository.getWeather();
   const adminConfig = repository.getAdminConfig();
+  const deptLimit = adminConfig.deptProcessingSlaMinutes || 60;
 
   const queueTrips = useMemo(
     () =>
@@ -110,15 +137,70 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     [trips, initialTripId]
   );
 
+  const prioritizedQueue = useMemo(() => {
+    return queueTrips
+      .map((t) => {
+        const st = normalizeStatus(t.status);
+        const clock = repository.computeDeptClockMinutes(t, nowTick);
+        const remainingMinutes = deptLimit - clock.netMinutes;
+        const isActionable = DEPT_ACTIONABLE_STATUSES.includes(st);
+        const isOverdue =
+          st === 'TAM_GIU_BIEN_PHONG' ||
+          (isActionable && st !== 'TAM_DUNG_THOI_TIET' && clock.netMinutes >= deptLimit);
+        const isUrgentNearExpiry =
+          !isOverdue &&
+          isActionable &&
+          st !== 'TAM_DUNG_THOI_TIET' &&
+          (clock.isAmber || st === 'OFFICE_TRA_LAI');
+
+        let urgencyTier = 4;
+        if (isOverdue) urgencyTier = 0;
+        else if (isUrgentNearExpiry) urgencyTier = 1;
+        else if (['CHO_SO_XU_LY', 'DA_CHAP_THUAN', 'DA_DUYET', 'DANG_TRINH_OFFICE'].includes(st)) {
+          urgencyTier = 2;
+        } else if (st === 'TAM_DUNG_THOI_TIET') urgencyTier = 3;
+
+        return {
+          trip: t,
+          st,
+          clock,
+          remainingMinutes,
+          isActionable,
+          isOverdue,
+          isUrgentNearExpiry,
+          urgencyTier,
+        };
+      })
+      .sort((a, b) => {
+        if (a.urgencyTier !== b.urgencyTier) return a.urgencyTier - b.urgencyTier;
+        if (a.urgencyTier <= 2 && a.remainingMinutes !== b.remainingMinutes) {
+          return a.remainingMinutes - b.remainingMinutes;
+        }
+        return (a.trip.scheduledDepartureTime || '').localeCompare(
+          b.trip.scheduledDepartureTime || ''
+        );
+      });
+  }, [queueTrips, nowTick, deptLimit]);
+
+  const [viewMode, setViewMode] = useState<'LIST' | 'DETAIL'>(
+    initialTripId ? 'DETAIL' : 'LIST'
+  );
+  const [listFilterTab, setListFilterTab] = useState<'ACTIONABLE' | 'ALL'>('ACTIONABLE');
+  const [listSearch, setListSearch] = useState<string>('');
+
   const [selectedTripId, setSelectedTripId] = useState<string>(
-    initialTripId || queueTrips[0]?.id || trips[0]?.id || ''
+    initialTripId || prioritizedQueue[0]?.trip.id || trips[0]?.id || ''
   );
 
   useEffect(() => {
     if (initialTripId) {
       setSelectedTripId(initialTripId);
-    } else if (!trips.some((t) => t.id === selectedTripId)) {
-      setSelectedTripId(queueTrips[0]?.id || trips[0]?.id || '');
+      setViewMode('DETAIL');
+    } else {
+      setViewMode('LIST');
+      if (!trips.some((t) => t.id === selectedTripId)) {
+        setSelectedTripId(prioritizedQueue[0]?.trip.id || trips[0]?.id || '');
+      }
     }
   }, [initialTripId, currentUser.id, currentUser.role]);
 
@@ -137,15 +219,6 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
   // Feedback banners
   const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
   const [actionErrorMsg, setActionErrorMsg] = useState<string | null>(null);
-
-  // Weather check inputs
-  const [wxWindForce, setWxWindForce] = useState<number>(weather.windForceBeaufort);
-  const [wxWaveHeight, setWxWaveHeight] = useState<number>(weather.waveHeightMeters);
-  const [wxVisibilityKm, setWxVisibilityKm] = useState<number>(weather.visibilityKm ?? 10);
-  const [wxForecastNote, setWxForecastNote] = useState<string>(
-    weather.forecastNext24h || 'Khu vực biển Lý Sơn gió Đông Bắc nhẹ, tầm nhìn thông thoáng.'
-  );
-  const [wxIsSafe, setWxIsSafe] = useState<boolean>(!weather.isRouteSuspended);
 
   // Route suspension modal
   const [showWeatherSuspendModal, setShowWeatherSuspendModal] = useState<boolean>(false);
@@ -202,16 +275,44 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     };
   }, [showDraftOrderModal]);
 
+  const filteredListItems = useMemo(() => {
+    const q = listSearch.trim().toLowerCase();
+    return prioritizedQueue.filter((item) => {
+      if (listFilterTab === 'ACTIONABLE' && !item.isActionable) return false;
+      if (!q) return true;
+      return `${item.trip.tripNumber} ${item.trip.vesselName} ${item.trip.vesselRegNumber} ${item.trip.routeName} ${item.trip.orderNumber || ''} ${item.trip.captainName || ''}`
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [prioritizedQueue, listFilterTab, listSearch]);
+
+  const listPagination = usePagination(
+    filteredListItems,
+    `${listFilterTab}|${listSearch.trim().toLowerCase()}`
+  );
+
+  const listSummary = useMemo(() => {
+    const actionableCount = prioritizedQueue.filter((i) => i.isActionable).length;
+    const urgentCount = prioritizedQueue.filter((i) => i.urgencyTier <= 1).length;
+    const officeCount = prioritizedQueue.filter((i) =>
+      ['DA_DUYET', 'DANG_TRINH_OFFICE', 'OFFICE_TRA_LAI'].includes(i.st)
+    ).length;
+    return { actionableCount, urgentCount, officeCount, total: prioritizedQueue.length };
+  }, [prioritizedQueue]);
+
+  // Tự động ghi nhận kiểm tra thời tiết theo thời gian thực khi Chuyên viên mở hồ sơ xử lý
+  useEffect(() => {
+    if (viewMode !== 'DETAIL' || !trip || !canEditDept) return;
+    const st = normalizeStatus(trip.status);
+    if (!trip.weatherCheckRecord && AUTO_WEATHER_CAPTURE_STATUSES.includes(st)) {
+      repository.recordDeptWeatherCheck(trip.id, currentUser);
+    }
+  }, [viewMode, trip?.id, trip?.weatherCheckRecord, canEditDept, currentUser.id]);
+
   useEffect(() => {
     setActionErrorMsg(null);
     setActionSuccessMsg(null);
     if (!trip) return;
-    const wxRec = trip.weatherCheckRecord;
-    setWxWindForce(wxRec?.windForceBeaufort ?? weather.windForceBeaufort);
-    setWxWaveHeight(wxRec?.waveHeightMeters ?? weather.waveHeightMeters);
-    setWxVisibilityKm(wxRec?.visibilityKm ?? weather.visibilityKm ?? 10);
-    setWxForecastNote(wxRec?.forecastNote || weather.forecastNext24h || 'Biển êm, tầm nhìn > 10km.');
-    setWxIsSafe(wxRec ? Boolean(wxRec.isSafe ?? wxRec.conclusion === 'AN_TOAN') : !weather.isRouteSuspended);
 
     setOfficeDocRef(trip.officeSubmissionRecord?.officeDocumentRef || '');
     const seqSuffix = trip.departurePortId === 'PORT-02' ? 'AB-LS' : 'LS-AB';
@@ -233,46 +334,21 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     setPermitServerPath(trip.issuedPdfServerPath || '');
   }, [selectedTripId]);
 
+  const handleOpenProcessTrip = (targetTrip: TripRecord) => {
+    setActionErrorMsg(null);
+    setActionSuccessMsg(null);
+    setSelectedTripId(targetTrip.id);
+    setViewMode('DETAIL');
+    const st = normalizeStatus(targetTrip.status);
+    if (canEditDept && !targetTrip.weatherCheckRecord && AUTO_WEATHER_CAPTURE_STATUSES.includes(st)) {
+      repository.recordDeptWeatherCheck(targetTrip.id, currentUser);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleOpenDocModal = (tab: OfficialFormTab) => {
     setFormsModalDefaultTab(tab);
     setShowOfficialFormsModal(true);
-  };
-
-  if (!trip) {
-    return (
-      <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 space-y-3">
-        <p className="text-slate-600 text-sm font-bold">
-          Hiện chưa có hồ sơ nào đang chờ Phòng An toàn giao thông (Sở Xây dựng) xử lý.
-        </p>
-        <button
-          type="button"
-          onClick={() => onNavigate('trips')}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer"
-        >
-          Xem danh sách hồ sơ
-        </button>
-      </div>
-    );
-  }
-
-  const handleRecordWeatherCheck = () => {
-    setActionErrorMsg(null);
-    const res = repository.recordDeptWeatherCheck(trip.id, currentUser, {
-      isSafe: wxIsSafe,
-      windForceBeaufort: Number(wxWindForce),
-      waveHeightMeters: Number(wxWaveHeight),
-      visibilityKm: Number(wxVisibilityKm),
-      forecastNote: wxForecastNote.trim(),
-    });
-    if (!res.success) {
-      setActionErrorMsg(res.error || 'Không thể ghi nhận kiểm tra thời tiết.');
-      return;
-    }
-    setActionSuccessMsg(
-      `Đã ghi nhận kiểm tra thời tiết (Gió cấp ${wxWindForce}, sóng ${wxWaveHeight}m — ${
-        wxIsSafe ? 'An toàn' : 'Không an toàn'
-      }).`
-    );
   };
 
   const handleToggleWeatherSuspension = () => {
@@ -283,7 +359,6 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
         setActionErrorMsg(res.error || 'Không thể mở lại tuyến.');
         return;
       }
-      setWxIsSafe(true);
       setActionSuccessMsg(`Đã mở lại tuyến Đảo Lớn – Đảo Bé và khôi phục ${res.resumedCount} hồ sơ.`);
     } else {
       setShowWeatherSuspendModal(true);
@@ -300,11 +375,397 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
       setActionErrorMsg(res.error || 'Không thể tạm dừng toàn tuyến.');
       return;
     }
-    setWxIsSafe(false);
     setActionSuccessMsg(
       `Đã kích hoạt TẠM DỪNG TOÀN TUYẾN DO THỜI TIẾT (${res.affectedCount} hồ sơ đang chờ Sở được tạm dừng và dừng đếm SLA).`
     );
   };
+
+  // MÀN HÌNH DANH SÁCH HỒ SƠ CẦN SỞ XỬ LÝ (SẮP XẾP ƯU TIÊN GẤP, GẦN HẾT HẠN TRƯỚC)
+  if (viewMode === 'LIST') {
+    return (
+      <div className="w-full mx-auto space-y-5">
+        <CoastalPageHero
+          title="Xử lý hồ sơ Sở & Trình ký Office"
+          subtitle="Danh sách hồ sơ cần Phòng An toàn giao thông xử lý, tự động xếp theo thứ tự ưu tiên khẩn cấp và gần hết hạn SLA trước. Nhấn Xử lý để mở chi tiết hồ sơ."
+          icon={<ClipboardCheck className="w-7 h-7" />}
+          rightContent={
+            <div className="flex flex-wrap items-center gap-3 text-xs font-bold text-white/95 tabular-nums">
+              <span>{listSummary.actionableCount} hồ sơ cần xử lý</span>
+              {listSummary.urgentCount > 0 && (
+                <>
+                  <span aria-hidden="true" className="opacity-50">·</span>
+                  <span className="text-[#fde68a]">{listSummary.urgentCount} hồ sơ gấp / sắp hết hạn</span>
+                </>
+              )}
+            </div>
+          }
+        />
+
+        {actionErrorMsg && (
+          <div className="p-3.5 bg-red-50 border border-red-300 rounded-xl flex items-center justify-between gap-2 text-xs font-bold text-red-950">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{actionErrorMsg}</span>
+            </div>
+            <button type="button" onClick={() => setActionErrorMsg(null)} className="cursor-pointer px-2">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+        {actionSuccessMsg && (
+          <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between gap-2 text-xs font-bold text-emerald-950">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{actionSuccessMsg}</span>
+            </div>
+            <button type="button" onClick={() => setActionSuccessMsg(null)} className="cursor-pointer px-2">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* 4 CHỈ SỐ TỔNG QUAN HÀNG ĐỢI SỞ */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 tabular-nums text-xs">
+          <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-1">
+            <span className="text-slate-500 font-semibold">Hồ sơ cần Sở xử lý</span>
+            <p className="text-2xl font-black text-[#07244d]">{listSummary.actionableCount}</p>
+            <p className="text-[11px] text-slate-500">Định mức SLA: {deptLimit} phút / hồ sơ</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-1">
+            <span className="text-rose-700 font-semibold">Ưu tiên gấp / Gần hết hạn</span>
+            <p className={`text-2xl font-black ${listSummary.urgentCount > 0 ? 'text-rose-700' : 'text-slate-800'}`}>
+              {listSummary.urgentCount}
+            </p>
+            <p className="text-[11px] text-slate-500">Quá hạn, sắp quá hạn hoặc Office trả lại</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-1">
+            <span className="text-indigo-700 font-semibold">Quy trình trình ký Office</span>
+            <p className="text-2xl font-black text-indigo-900">{listSummary.officeCount}</p>
+            <p className="text-[11px] text-slate-500">Đã duyệt dự thảo · Đang trình · Trả lại</p>
+          </div>
+          <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col justify-between gap-2">
+            <div className="space-y-0.5">
+              <span className="text-slate-500 font-semibold">Thời tiết tuyến thời gian thực</span>
+              <p className={`text-sm font-black ${weather.isRouteSuspended ? 'text-rose-700' : 'text-emerald-700'}`}>
+                {weather.isRouteSuspended
+                  ? 'Đang tạm dừng toàn tuyến'
+                  : `Gió cấp ${weather.windForceBeaufort} · Sóng ${weather.waveHeightMeters}m`}
+              </p>
+            </div>
+            {isOfficerOrAdmin && (
+              <button
+                type="button"
+                onClick={handleToggleWeatherSuspension}
+                disabled={!canEditDept}
+                className={`self-start px-3 py-1.5 rounded-lg font-bold text-[11px] cursor-pointer disabled:opacity-50 ${
+                  weather.isRouteSuspended
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200'
+                }`}
+              >
+                {weather.isRouteSuspended ? 'Mở lại tuyến' : 'Tạm dừng toàn tuyến'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* THANH BỘ LỌC & TÌM KIẾM */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg self-start">
+            <button
+              type="button"
+              onClick={() => setListFilterTab('ACTIONABLE')}
+              className={`px-3.5 py-1.5 text-xs font-bold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                listFilterTab === 'ACTIONABLE'
+                  ? 'bg-white text-[#07244d] shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Cần xử lý ({listSummary.actionableCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setListFilterTab('ALL')}
+              className={`px-3.5 py-1.5 text-xs font-bold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                listFilterTab === 'ALL'
+                  ? 'bg-white text-[#07244d] shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Tất cả hồ sơ Sở ({listSummary.total})
+            </button>
+          </div>
+
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={listSearch}
+              onChange={(e) => setListSearch(e.target.value)}
+              placeholder="Tìm mã hồ sơ, tên tàu, số đăng ký, thuyền trưởng..."
+              className="w-full pl-9 pr-3 py-2 text-xs border border-slate-300 rounded-lg bg-white"
+            />
+          </div>
+        </div>
+
+        {/* BẢNG DANH SÁCH HỒ SƠ CẦN XỬ LÝ THEO THỨ TỰ ƯU TIÊN */}
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden text-xs">
+          <div className="px-4 sm:px-6 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+            <span className="font-extrabold text-[#07244d]">
+              Danh sách hồ sơ ({filteredListItems.length} hồ sơ)
+            </span>
+            <span className="text-[11px] text-slate-500 font-medium">
+              Thứ tự ưu tiên: Khẩn cấp / Quá hạn → Gần hết hạn SLA → Giờ rời bến sớm nhất
+            </span>
+          </div>
+
+          {filteredListItems.length === 0 ? (
+            <div className="p-10 text-center space-y-3">
+              <p className="text-slate-600 font-bold text-sm">
+                {listFilterTab === 'ACTIONABLE'
+                  ? 'Hiện không có hồ sơ nào đang chờ Phòng An toàn giao thông xử lý.'
+                  : 'Không có hồ sơ nào khớp từ khóa tìm kiếm.'}
+              </p>
+              {listFilterTab === 'ACTIONABLE' && listSummary.total > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setListFilterTab('ALL')}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-bold text-xs cursor-pointer"
+                >
+                  Xem toàn bộ {listSummary.total} hồ sơ Sở
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[820px]">
+                <thead className="bg-slate-50/80 text-slate-600 font-bold text-[11px] border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Mức ưu tiên &amp; Hạn SLA</th>
+                    <th className="py-3 px-4">Hồ sơ &amp; Phương tiện</th>
+                    <th className="py-3 px-4">Hành trình &amp; Tải trọng</th>
+                    <th className="py-3 px-4">Trạng thái &amp; Thời tiết R7</th>
+                    <th className="py-3 px-4 text-right">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 tabular-nums">
+                  {listPagination.pageItems.map((item) => {
+                    const { trip: t, st, clock, remainingMinutes, isOverdue, isUrgentNearExpiry } = item;
+                    const stInfo = getStatusInfo(t.status);
+                    const pct = Math.min(100, Math.max(0, Math.round((clock.netMinutes / deptLimit) * 100)));
+                    const wxRec = t.weatherCheckRecord;
+
+                    return (
+                      <tr
+                        key={t.id}
+                        className={`transition-colors ${
+                          isOverdue
+                            ? 'bg-rose-50/45 hover:bg-rose-50/80'
+                            : isUrgentNearExpiry
+                            ? 'bg-amber-50/35 hover:bg-amber-50/70'
+                            : 'hover:bg-slate-50/80'
+                        }`}
+                      >
+                        <td className="py-3.5 px-4 align-top w-52">
+                          <div className="space-y-1.5">
+                            {st === 'DA_CAP_PHEP' ? (
+                              <span className="font-bold text-emerald-700">Đã cấp phép</span>
+                            ) : st === 'TAM_DUNG_THOI_TIET' ? (
+                              <span className="font-bold text-slate-600">Tạm dừng SLA (Thời tiết)</span>
+                            ) : isOverdue ? (
+                              <div className="space-y-0.5">
+                                <span className="font-black text-rose-700 flex items-center gap-1">
+                                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                  {st === 'TAM_GIU_BIEN_PHONG'
+                                    ? 'Khẩn cấp · BP tạm giữ'
+                                    : `Quá hạn +${Math.abs(remainingMinutes)} phút`}
+                                </span>
+                                <span className="text-[11px] text-rose-700/90 font-medium block">
+                                  Đã xử lý {clock.netMinutes}/{deptLimit}p
+                                </span>
+                              </div>
+                            ) : isUrgentNearExpiry ? (
+                              <div className="space-y-0.5">
+                                <span className="font-black text-amber-800 flex items-center gap-1">
+                                  <Clock className="w-3.5 h-3.5 shrink-0" />
+                                  Gấp · Còn {Math.max(0, remainingMinutes)} phút
+                                </span>
+                                <span className="text-[11px] text-amber-800/90 font-medium block">
+                                  {st === 'OFFICE_TRA_LAI'
+                                    ? 'Office trả lại cần xử lý ngay'
+                                    : `Đã qua ${clock.netMinutes}/${deptLimit}p`}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="space-y-0.5">
+                                <span className="font-bold text-[#07244d] flex items-center gap-1">
+                                  <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                  Còn {Math.max(0, remainingMinutes)} phút
+                                </span>
+                                <span className="text-[11px] text-slate-500 block">
+                                  Đã qua {clock.netMinutes}/{deptLimit}p
+                                </span>
+                              </div>
+                            )}
+
+                            {st !== 'DA_CAP_PHEP' && st !== 'TAM_DUNG_THOI_TIET' && (
+                              <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${
+                                    isOverdue
+                                      ? 'bg-rose-600'
+                                      : isUrgentNearExpiry
+                                      ? 'bg-amber-500'
+                                      : 'bg-blue-600'
+                                  }`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 align-top">
+                          <div className="space-y-0.5">
+                            <p className="font-black text-[#07244d] text-xs font-mono">{t.tripNumber}</p>
+                            <p className="font-bold text-slate-900">
+                              Tàu {t.vesselName}{' '}
+                              <span className="font-mono text-slate-500 font-semibold">({t.vesselRegNumber})</span>
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              Thuyền trưởng: {t.captainName}
+                              {t.orderNumber ? ` · GP: ${t.orderNumber}` : ''}
+                            </p>
+                          </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 align-top">
+                          <div className="space-y-0.5">
+                            <p className="font-semibold text-slate-800">{t.routeName}</p>
+                            <p className="text-[11px] text-slate-600">
+                              Rời {t.departurePortName} · {formatDateTime(t.scheduledDepartureTime)}
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              {t.passengerCount} hành khách · {t.crewMembers.length} thuyền viên · {t.cargoTons} tấn
+                            </p>
+                          </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 align-top">
+                          <div className="space-y-1">
+                            <p className={`font-extrabold ${stInfo.badgeText}`}>{stInfo.label}</p>
+                            <p className="text-[11px] text-slate-600">
+                              {wxRec ? (
+                                <>
+                                  Thời tiết R7:{' '}
+                                  <strong className={wxRec.isSafe ? 'text-emerald-700' : 'text-rose-700'}>
+                                    {wxRec.isSafe ? 'Đạt' : 'Nguy hiểm'}
+                                  </strong>{' '}
+                                  (Gió c.{wxRec.windForceBeaufort}, sóng {wxRec.waveHeightMeters}m)
+                                </>
+                              ) : (
+                                <span className="text-slate-500">
+                                  Thời tiết R7: Tự động chốt khi mở xử lý
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 align-middle text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenProcessTrip(t)}
+                            className={`px-4 py-2 rounded-lg font-extrabold text-xs inline-flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap ${
+                              st === 'DA_CAP_PHEP'
+                                ? 'bg-white hover:bg-slate-100 text-[#07244d] border border-slate-300'
+                                : isOverdue
+                                ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                                : 'bg-[#072b61] hover:bg-[#0c4a9c] text-white'
+                            }`}
+                          >
+                            <span>{st === 'DA_CAP_PHEP' ? 'Chi tiết' : 'Xử lý'}</span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <PaginationBar
+            currentPage={listPagination.currentPage}
+            totalPages={listPagination.totalPages}
+            totalItems={listPagination.totalItems}
+            pageSize={listPagination.pageSize}
+            startIndex={listPagination.startIndex}
+            endIndex={listPagination.endIndex}
+            onPageChange={listPagination.setCurrentPage}
+            itemLabel="hồ sơ"
+          />
+        </div>
+
+        {/* MODAL TẠM DỪNG TOÀN TUYẾN DO THỜI TIẾT (từ màn hình danh sách) */}
+        {showWeatherSuspendModal &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+              <div className="bg-white rounded-2xl p-5 sm:p-6 max-w-md w-full max-h-[92dvh] overflow-y-auto shadow-2xl border border-rose-200 space-y-4 text-xs">
+                <h3 className="text-sm font-black text-rose-950 uppercase">
+                  Kích hoạt Tạm dừng toàn tuyến do thời tiết xấu
+                </h3>
+                <p className="text-slate-600">
+                  Toàn bộ hồ sơ đang chờ Sở xử lý sẽ tự động chuyển sang <strong>Tạm dừng thời tiết</strong> và dừng đếm đồng hồ SLA.
+                </p>
+                <textarea
+                  rows={3}
+                  value={weatherSuspendReason}
+                  onChange={(e) => setWeatherSuspendReason(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowWeatherSuspendModal(false)}
+                    className="px-4 py-2 bg-slate-100 rounded-xl font-semibold cursor-pointer"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmWeatherSuspend}
+                    className="px-4 py-2 bg-rose-600 text-white rounded-xl font-bold cursor-pointer"
+                  >
+                    Xác nhận tạm dừng toàn tuyến
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+      </div>
+    );
+  }
+
+  if (!trip) {
+    return (
+      <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 space-y-3">
+        <p className="text-slate-600 text-sm font-bold">
+          Hiện chưa có hồ sơ nào đang chờ Phòng An toàn giao thông (Sở Xây dựng) xử lý.
+        </p>
+        <button
+          type="button"
+          onClick={() => setViewMode('LIST')}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold cursor-pointer"
+        >
+          Quay lại danh sách hồ sơ
+        </button>
+      </div>
+    );
+  }
 
   const openReturnFaultModal = (initialParty: 'BQL_CANG' | 'CHU_TAU') => {
     setActionErrorMsg(null);
@@ -538,13 +999,23 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     <div className="w-full mx-auto space-y-5 transition-all duration-300">
       {/* HEADER BANNER SỞ XÂY DỰNG */}
       <div className="bg-gradient-to-r from-[#065fd4] via-[#0c74e8] to-[#1a8df5] text-white p-5 sm:p-7 rounded-[24px] shadow-[0_14px_34px_-10px_rgba(10,92,212,0.38)] space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-white/15">
+          <button
+            type="button"
+            onClick={() => setViewMode('LIST')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 border border-white/25 text-white text-xs font-bold cursor-pointer transition"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Quay lại danh sách hồ sơ cần xử lý ({listSummary.actionableCount})</span>
+          </button>
+          <span className="text-[11px] font-semibold text-blue-100">
+            Phòng An toàn giao thông — Sở Xây dựng Quảng Ngãi
+          </span>
+        </div>
+
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1.5 min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 border border-white/25 text-[11px] font-bold">
-                <ShieldCheck className="w-3.5 h-3.5 text-[#fde68a]" />
-                Phòng An toàn giao thông — Sở Xây dựng Quảng Ngãi
-              </span>
               <span className={`px-3 py-1 rounded-full text-[11px] font-extrabold border ${statusInfo.badgeBg} ${statusInfo.badgeText} ${statusInfo.badgeBorder}`}>
                 {statusInfo.label}
               </span>
@@ -569,13 +1040,16 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
           <div className="bg-white/95 rounded-2xl p-3 sm:min-w-[330px] shadow-md">
             <SearchableSelect
               value={selectedTripId}
-              onChange={(val) => setSelectedTripId(val)}
-              ariaLabel="Chọn hồ sơ cần Sở xử lý"
+              onChange={(val) => {
+                const found = trips.find((item) => item.id === val);
+                if (found) handleOpenProcessTrip(found);
+                else setSelectedTripId(val);
+              }}
+              ariaLabel="Chuyển nhanh hồ sơ cần Sở xử lý"
               icon={<Calendar className="w-4 h-4 text-[#0d62e8]" />}
               searchPlaceholder="Tìm mã hồ sơ, tàu, số GP..."
-              options={queueTrips.map((t) => {
+              options={prioritizedQueue.map(({ trip: t, st }) => {
                 const info = getStatusInfo(t.status);
-                const st = normalizeStatus(t.status);
                 const highlight = ['CHO_SO_XU_LY', 'OFFICE_TRA_LAI', 'DA_DUYET', 'DANG_TRINH_OFFICE'].includes(st);
                 return {
                   value: t.id,
@@ -635,12 +1109,12 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
               <Lock className="w-5 h-5 text-amber-700 shrink-0" />
             )}
             <div>
-              <p className="font-black uppercase text-[11px]">Phân quyền &amp; Ca trực Sở</p>
+              <p className="font-black uppercase text-[11px]">Phân quyền xử lý hồ sơ Sở</p>
               <p className="text-[11px]">
                 {!isOfficerOrAdmin
                   ? 'Chế độ chỉ đọc (Trưởng phòng/Lãnh đạo ký trên Office)'
                   : shiftCheck.allowed
-                  ? `Trong ca trực${shiftCheck.shift ? `: ${shiftCheck.shift.shiftName}` : ''}`
+                  ? `Hợp lệ • Được phép xử lý theo vai trò${shiftCheck.shift ? ` (${shiftCheck.shift.shiftName})` : ''}`
                   : shiftCheck.reason}
               </p>
             </div>
@@ -873,108 +1347,112 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
             )}
           </div>
 
-          {/* KHỐI 2: KIỂM TRA THỜI TIẾT TẠI THỜI ĐIỂM CẤP PHÉP (R7) */}
-          <div className="bg-white rounded-[20px] border border-[#dce8f7] p-5 shadow-xs space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
-              <div>
-                <h2 className="text-sm font-black text-slate-900 uppercase flex items-center gap-2">
-                  <CloudRain className="w-4 h-4 text-blue-600" />
-                  2. Ghi nhận kiểm tra thời tiết tại thời điểm xét cấp phép (Quy tắc R7)
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  {trip.weatherCheckRecord
-                    ? `Đã ghi nhận lúc ${formatDateTime(trip.weatherCheckRecord.checkedAt)} bởi ${trip.weatherCheckRecord.checkedByName}`
-                    : 'Bắt buộc ghi nhận kết quả kiểm tra thời tiết trước khi Duyệt dự thảo.'}
-                </p>
-              </div>
-              {trip.weatherCheckRecord && (
-                <span
-                  className={`px-2.5 py-1 rounded-full text-[11px] font-black ${
-                    trip.weatherCheckRecord.isSafe
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-rose-100 text-rose-800'
-                  }`}
-                >
-                  {trip.weatherCheckRecord.isSafe ? '✓ Thời tiết Đạt' : '✕ Thời tiết Nguy hiểm'}
-                </span>
-              )}
-            </div>
+          {/* KHỐI 2: KIỂM TRA THỜI TIẾT TẠI THỜI ĐIỂM CẤP PHÉP (R7 — TỰ ĐỘNG THỜI GIAN THỰC, CHỈ ĐỌC) */}
+          {(() => {
+            const wxRec = trip.weatherCheckRecord;
+            const maxWind = vessel?.maxWindForce ?? 6;
+            const maxWave = vessel?.maxWaveHeight ?? 2.0;
+            const displayWind = wxRec ? wxRec.windForceBeaufort : weather.windForceBeaufort;
+            const displayWave = wxRec ? wxRec.waveHeightMeters : weather.waveHeightMeters;
+            const displayVis = wxRec ? (wxRec.visibilityKm ?? 10) : (weather.visibilityKm ?? 10);
+            const displayNote = wxRec
+              ? wxRec.forecastNote || 'Dữ liệu khí tượng thời gian thực tuyến Lý Sơn.'
+              : weather.forecastNext24h ||
+                `Khu vực biển Lý Sơn gió cấp ${weather.windForceBeaufort}, sóng ${weather.waveHeightMeters}m.`;
+            const displaySafe = wxRec
+              ? Boolean(wxRec.isSafe ?? wxRec.conclusion === 'AN_TOAN')
+              : !weather.isRouteSuspended && displayWind <= maxWind && displayWave <= maxWave;
+            const displayTime = wxRec ? formatDateTime(wxRec.checkedAt) : formatDateTime(nowTick.toISOString());
+            const displayActor = wxRec ? wxRec.checkedByName : currentUser.fullName;
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Cấp gió (Beaufort):</label>
-                <input
-                  type="number"
-                  value={wxWindForce}
-                  onChange={(e) => setWxWindForce(Number(e.target.value))}
-                  className="w-full p-2 border border-slate-300 rounded-xl font-bold"
-                />
-              </div>
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Độ cao sóng (m):</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={wxWaveHeight}
-                  onChange={(e) => setWxWaveHeight(Number(e.target.value))}
-                  className="w-full p-2 border border-slate-300 rounded-xl font-bold"
-                />
-              </div>
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Tầm nhìn xa (km):</label>
-                <input
-                  type="number"
-                  step="0.5"
-                  value={wxVisibilityKm}
-                  onChange={(e) => setWxVisibilityKm(Number(e.target.value))}
-                  className="w-full p-2 border border-slate-300 rounded-xl font-bold"
-                />
-              </div>
-            </div>
+            return (
+              <div className="bg-white rounded-[20px] border border-[#dce8f7] p-5 shadow-xs space-y-4">
+                <div className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-200 pb-3">
+                  <div className="space-y-1">
+                    <h2 className="text-sm font-black text-slate-900 uppercase flex items-center gap-2">
+                      <CloudRain className="w-4 h-4 text-blue-600 shrink-0" />
+                      2. Ghi nhận kiểm tra thời tiết tại thời điểm xét cấp phép (Quy tắc R7)
+                    </h2>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600 tabular-nums">
+                      <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
+                        <UserCheck className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        Người thực hiện: <strong>{displayActor}</strong>
+                      </span>
+                      <span aria-hidden="true" className="text-slate-300">·</span>
+                      <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
+                        <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        Thời điểm: <strong>{displayTime}</strong>
+                      </span>
+                    </div>
+                  </div>
+                  <span
+                    className={`px-3 py-1 rounded-full text-[11px] font-black shrink-0 ${
+                      displaySafe
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-rose-100 text-rose-800'
+                    }`}
+                  >
+                    {displaySafe ? '✓ Đạt điều kiện an toàn' : '✕ Thời tiết không đạt'}
+                  </span>
+                </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-              <div className="sm:col-span-2">
-                <label className="block font-bold text-slate-700 mb-1">Nhận định / Dự báo 24h:</label>
-                <input
-                  type="text"
-                  value={wxForecastNote}
-                  onChange={(e) => setWxForecastNote(e.target.value)}
-                  className="w-full p-2 border border-slate-300 rounded-xl"
-                />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setWxIsSafe(true)}
-                  className={`flex-1 py-2 rounded-xl font-bold cursor-pointer ${
-                    wxIsSafe ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  Đạt
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setWxIsSafe(false)}
-                  className={`flex-1 py-2 rounded-xl font-bold cursor-pointer ${
-                    !wxIsSafe ? 'bg-rose-600 text-white' : 'bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  Không đạt
-                </button>
-              </div>
-            </div>
+                {/* Thông báo tự động lấy thời gian thực & khóa không chỉnh sửa */}
+                <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-700">
+                  <span className="inline-flex items-center gap-1.5 font-semibold">
+                    <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    {wxRec
+                      ? 'Dữ liệu thời tiết được ghi nhận tự động theo thời gian thực và đã khóa — không cho phép chỉnh sửa.'
+                      : 'Dữ liệu lấy tự động từ hệ thống thời tiết thời gian thực (chỉ đọc, không cho phép chỉnh sửa thủ công).'}
+                  </span>
+                  <span className="text-slate-500 font-medium tabular-nums">
+                    Ngưỡng tàu: Gió ≤ c.{maxWind} · Sóng ≤ {maxWave}m
+                  </span>
+                </div>
 
-            <div className="flex justify-end">
-              <button
-                type="button"
-                disabled={!canEditDept}
-                onClick={handleRecordWeatherCheck}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-bold cursor-pointer"
-              >
-                Ghi nhận kết quả kiểm tra thời tiết
-              </button>
-            </div>
-          </div>
+                {/* 3 thông số khí tượng chỉ đọc */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 tabular-nums">
+                  <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-200 space-y-1">
+                    <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+                      <Wind className="w-3.5 h-3.5 text-blue-600" />
+                      Cấp gió (Beaufort)
+                    </span>
+                    <p className="text-lg font-black text-[#07244d]">Cấp {displayWind}</p>
+                    <p className="text-[10px] text-slate-500">
+                      Hướng: {weather.windDirection || 'Đông Bắc'}
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-200 space-y-1">
+                    <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+                      <Waves className="w-3.5 h-3.5 text-blue-600" />
+                      Độ cao sóng (m)
+                    </span>
+                    <p className="text-lg font-black text-[#07244d]">{displayWave} m</p>
+                    <p className="text-[10px] text-slate-500">
+                      Giới hạn thiết kế: ≤ {maxWave}m
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-200 space-y-1">
+                    <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+                      <Compass className="w-3.5 h-3.5 text-blue-600" />
+                      Tầm nhìn xa (km)
+                    </span>
+                    <p className="text-lg font-black text-[#07244d]">{displayVis} km</p>
+                    <p className="text-[10px] text-slate-500">
+                      Khu vực: {wxRec?.area || weather.area || 'Tuyến Đảo Lớn – Đảo Bé'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Nhận định / Dự báo chỉ đọc */}
+                <div className="p-3 rounded-xl bg-slate-50/80 border border-slate-200 space-y-1">
+                  <span className="block text-[11px] font-bold text-slate-600">
+                    Nhận định / Dự báo 24h (Tự động từ nguồn khí tượng):
+                  </span>
+                  <p className="text-xs text-slate-800 leading-relaxed">{displayNote}</p>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* CỘT 3: HÀNH ĐỘNG CHUYÊN VIÊN & QUY TRÌNH OFFICE */}

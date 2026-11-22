@@ -383,7 +383,7 @@ export default function App() {
       targetPage = 'trips';
     }
     if (currentUser?.role === 'BP_TRUC') {
-      const allowedTruc = ['bp-daily-trips', 'bp-qr-verify', 'bp-sea-monitor', 'weather', 'guide', 'public-verify'];
+      const allowedTruc = ['bp-daily-trips', 'bp-qr-verify', 'bp-sea-monitor', 'weather', 'duty-schedule', 'guide', 'public-verify'];
       if (!allowedTruc.includes(targetPage)) targetPage = 'bp-daily-trips';
     } else if (currentUser?.role === 'BP_CHIHUY') {
       const allowedChiHuy = ['bp-daily-trips', 'bp-qr-verify', 'bp-sea-monitor', 'bp-reports', 'weather', 'duty-schedule', 'guide', 'public-verify'];

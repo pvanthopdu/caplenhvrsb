@@ -66,7 +66,7 @@ export const HelpGuidePage: React.FC = () => {
               <span>BAN QUẢN LÝ CẢNG KIỂM TRA (ĐỒNG HỒ 1 ≤ 60 PHÚT)</span>
             </div>
             <p className="text-slate-700 leading-relaxed">
-              Nhân viên <strong>đang trong ca trực và đúng bến</strong> kiểm tra 8 nhóm điều kiện thực tế tại cầu tàu, đối chiếu phí lệ phí và chụp ảnh hiện trường → ra <strong>Thông báo chấp thuận</strong> chuyển Sở, hoặc Trả Chủ tàu bổ sung (tạm dừng đồng hồ BQL), hoặc Không chấp thuận.
+              Nhân viên BQL Cảng <strong>đúng bến phụ trách</strong> kiểm tra 8 nhóm điều kiện thực tế tại cầu tàu, đối chiếu phí lệ phí và chụp ảnh hiện trường → ra <strong>Thông báo chấp thuận</strong> chuyển Sở, hoặc Trả Chủ tàu bổ sung (tạm dừng đồng hồ BQL), hoặc Không chấp thuận.
             </p>
           </div>
 
@@ -110,7 +110,7 @@ export const HelpGuidePage: React.FC = () => {
             Quy tắc Ca trực &amp; KPI
           </p>
           <p className="text-slate-600 leading-relaxed">
-            Chỉ cán bộ đang trong ca trực (và đúng bến với BQL/Biên phòng) mới được thao tác xử lý. KPI chỉ chấm cho <strong>BQL Cảng</strong> và <strong>Chuyên viên Sở</strong> (không chấm Biên phòng, Trưởng phòng, Lãnh đạo).
+            Người dùng đăng nhập thành công được xử lý hồ sơ theo đúng vai trò và bến phụ trách mà không bị giới hạn bởi ca trực; lịch ca trực được quản lý riêng để phân công và lưu vết nhật ký. KPI chấm cho <strong>BQL Cảng</strong> và <strong>Chuyên viên Sở</strong>.
           </p>
         </div>
 

@@ -530,7 +530,7 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
       return;
     }
     if (!shiftPortValidation.allowed) {
-      setPermissionNotice(shiftPortValidation.reason || 'Bạn không nằm trong ca trực hoặc sai bến phụ trách.');
+      setPermissionNotice(shiftPortValidation.reason || 'Tài khoản không thuộc bến phụ trách của hồ sơ này.');
       return;
     }
 
@@ -758,12 +758,12 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
             )}
             <div>
               <p className="font-black uppercase text-[11px]">
-                Kiểm tra Ca trực &amp; Bến phụ trách ({selectedTrip.departurePortName})
+                Kiểm tra Quyền &amp; Bến phụ trách ({selectedTrip.departurePortName})
               </p>
               <p className="text-[11px]">
                 {shiftPortValidation.allowed
-                  ? `Hợp lệ${shiftPortValidation.shift ? ` • ${shiftPortValidation.shift.shiftName}` : ''} (${currentUser.fullName})`
-                  : shiftPortValidation.reason || 'Ngoài ca trực hoặc khác bến phụ trách — Chỉ xem.'}
+                  ? `Hợp lệ • Đủ quyền xử lý${shiftPortValidation.shift ? ` • ${shiftPortValidation.shift.shiftName}` : ''} (${currentUser.fullName})`
+                  : shiftPortValidation.reason || 'Tài khoản khác bến phụ trách — Chỉ xem.'}
               </p>
             </div>
           </div>

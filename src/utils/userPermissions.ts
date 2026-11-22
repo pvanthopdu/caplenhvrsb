@@ -219,27 +219,22 @@ export function getRequiredPortIdForTripAction(
 }
 
 /**
- * Kiểm tra chặt chẽ một hồ sơ có phải là NHIỆM VỤ CẦN XỬ LÝ của đúng tài khoản hiện tại hay không:
+ * Kiểm tra một hồ sơ có phải là NHIỆM VỤ CẦN XỬ LÝ của đúng tài khoản hiện tại hay không:
  * - Đúng vai trò chịu trách nhiệm ở trạng thái hiện tại (ADMIN / DEPT_HEAD / LEADER => false)
  * - Đúng bến phụ trách (với BQL Cảng và Biên phòng: bến đi khi kiểm tra/kiểm soát xuất bến, bến đến khi xác nhận cập bến)
- * - Đang trong ca trực (với BQL Cảng, Chuyên viên, Biên phòng — khi truyền cờ isInActiveShift)
+ * - Không chặn theo ca trực: người dùng đăng nhập thành công được xử lý theo đúng vai trò/quyền.
  */
 export function isTripMyActionTask(
   user: UserAccount,
   trip: TripRecord,
-  options?: { isInActiveShift?: boolean }
+  _options?: { isInActiveShift?: boolean }
 ): boolean {
+  void _options;
   if (!isUrgentTripForUserRole(user.role, trip)) {
     return false;
   }
 
   const status = normalizeStatus(trip.status);
-
-  if (['PORT_STAFF', 'OFFICER', 'BP_TRUC', 'BP_CHIHUY'].includes(user.role)) {
-    if (options && options.isInActiveShift === false) {
-      return false;
-    }
-  }
 
   if (user.role === 'PORT_STAFF') {
     if (status === 'CHO_KIEM_TRA' || status === 'TRA_BQL_CANG') {

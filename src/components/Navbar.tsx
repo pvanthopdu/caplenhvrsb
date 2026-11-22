@@ -168,22 +168,22 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Các nút tương tác bên phải */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-          {/* Trạng thái ca trực trên thanh điều hướng */}
+          {/* Trạng thái ca trực / quyền xử lý trên thanh điều hướng */}
           {isShiftRole && (
             <div
               className={`hidden lg:inline-flex items-center gap-1.5 px-2.5 xl:px-3 py-1.5 text-[11px] font-bold rounded-full border whitespace-nowrap shrink-0 ${
                 activeShift
                   ? 'bg-emerald-500/20 text-emerald-100 border-emerald-300/40'
-                  : 'bg-amber-500/25 text-amber-100 border-amber-300/50'
+                  : 'bg-sky-500/20 text-sky-100 border-sky-300/40'
               }`}
               title={
                 activeShift
                   ? `${activeShift.shiftName} (${activeShift.startTime}-${activeShift.endTime})`
-                  : 'Hiện tại không nằm trong khung giờ ca trực được phân công (chế độ chỉ xem)'
+                  : 'Đã đăng nhập — Được phép xử lý hồ sơ theo vai trò và bến phụ trách'
               }
             >
               <Clock className="w-3.5 h-3.5 shrink-0" />
-              <span>{activeShift ? 'Đang trong ca' : 'Ngoài ca (Chỉ xem)'}</span>
+              <span>{activeShift ? 'Đang trong ca' : 'Sẵn sàng xử lý'}</span>
               {assignedPortLabel && <span className="hidden xl:inline opacity-85">• {assignedPortLabel}</span>}
             </div>
           )}
@@ -295,14 +295,14 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <div className="flex items-start gap-2 pt-2 border-t border-slate-200">
                       <MapPin className="w-3.5 h-3.5 text-blue-600 mt-0.5 shrink-0" />
                       <div>
-                        <p className="text-[10px] text-slate-400 font-semibold uppercase">Bến & Ca trực hiện tại</p>
+                        <p className="text-[10px] text-slate-400 font-semibold uppercase">Bến &amp; Ca trực hiện tại</p>
                         {assignedPortLabel && (
                           <p className="font-bold text-slate-900">{assignedPortLabel}</p>
                         )}
-                        <p className={`text-[11px] font-bold ${activeShift ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        <p className={`text-[11px] font-bold ${activeShift ? 'text-emerald-700' : 'text-blue-700'}`}>
                           {activeShift
                             ? `${activeShift.shiftName} (${activeShift.startTime}–${activeShift.endTime})`
-                            : 'Ngoài ca trực (Chế độ chỉ xem)'}
+                            : 'Đang hoạt động — Xử lý hồ sơ theo quyền được cấp'}
                         </p>
                       </div>
                     </div>

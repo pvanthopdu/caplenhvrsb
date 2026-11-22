@@ -630,6 +630,205 @@ export async function createApp(options: CreateAppOptions = {}) {
     }
   );
 
+  // =========================================================================
+  // QUẢN LÝ CA TRỰC (THÊM / CẬP NHẬT / XÓA — ĐỒNG BỘ TOÀN SERVER)
+  // =========================================================================
+  const dutyShiftsFilePath = path.join(systemConfigDir, 'duty-shifts.json');
+  const VALID_SHIFT_GROUPS = new Set(['BQL_CANG', 'CHUYEN_VIEN', 'BIEN_PHONG']);
+  const VALID_SHIFT_STATUSES = new Set(['SCHEDULED', 'ACTIVE', 'COMPLETED']);
+
+  const readServerDutyShifts = (): { initialized: boolean; shifts: Record<string, any>[] } => {
+    try {
+      if (fs.existsSync(dutyShiftsFilePath)) {
+        const raw = fs.readFileSync(dutyShiftsFilePath, 'utf8');
+        const parsed = JSON.parse(raw) as { shifts?: Record<string, any>[] } | Record<string, any>[];
+        const list = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.shifts)
+          ? parsed.shifts
+          : [];
+        return { initialized: true, shifts: list };
+      }
+    } catch {
+      // fallback uninitialized
+    }
+    return { initialized: false, shifts: [] };
+  };
+
+  const writeServerDutyShifts = (shifts: Record<string, any>[]) => {
+    fs.mkdirSync(systemConfigDir, { recursive: true });
+    fs.writeFileSync(
+      dutyShiftsFilePath,
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          shifts,
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+  };
+
+  const sanitizeDutyShiftPayload = (body: Record<string, any>, forcedId?: string) => {
+    const id = String(forcedId || body?.id || `SHIFT-${Date.now()}`)
+      .trim()
+      .slice(0, 80);
+    const date = String(body?.date || body?.dutyDate || '')
+      .trim()
+      .slice(0, 20);
+    const shiftName = String(body?.shiftName || '')
+      .trim()
+      .slice(0, 140);
+    const roleGroup = String(body?.roleGroup || 'BQL_CANG').trim();
+    const startTime = String(body?.startTime || '06:00')
+      .trim()
+      .slice(0, 10);
+    const endTime = String(body?.endTime || '18:00')
+      .trim()
+      .slice(0, 10);
+    const status = VALID_SHIFT_STATUSES.has(String(body?.status || ''))
+      ? String(body.status)
+      : 'SCHEDULED';
+    const assigneeIds: string[] = Array.isArray(body?.assigneeIds)
+      ? body.assigneeIds.map((v: unknown) => String(v || '').trim()).filter(Boolean)
+      : [];
+    const assigneeNames: string[] = Array.isArray(body?.assigneeNames)
+      ? body.assigneeNames.map((v: unknown) => String(v || '').trim()).filter(Boolean)
+      : [];
+
+    if (!date) {
+      return { error: 'Vui lòng chọn ngày trực.' };
+    }
+    if (!shiftName) {
+      return { error: 'Vui lòng nhập tên ca trực.' };
+    }
+    if (!VALID_SHIFT_GROUPS.has(roleGroup)) {
+      return { error: 'Nhóm lực lượng ca trực không hợp lệ.' };
+    }
+    const requiresPort = roleGroup === 'BQL_CANG' || roleGroup === 'BIEN_PHONG';
+    const portId =
+      requiresPort && (body?.portId === 'PORT-01' || body?.portId === 'PORT-02')
+        ? String(body.portId)
+        : undefined;
+    if (requiresPort && !portId) {
+      return { error: 'BQL Cảng và Biên phòng bắt buộc chọn bến phụ trách.' };
+    }
+    if (assigneeIds.length === 0) {
+      return { error: 'Vui lòng chọn ít nhất 01 cán bộ trực ca.' };
+    }
+
+    const shift: Record<string, any> = {
+      id,
+      date,
+      dutyDate: date,
+      roleGroup,
+      portId,
+      shiftType: typeof body?.shiftType === 'string' ? body.shiftType.slice(0, 30) : 'MORNING',
+      shiftName,
+      startTime,
+      endTime,
+      assigneeIds,
+      assigneeNames,
+      officerId: String(body?.officerId || assigneeIds[0] || '').trim() || undefined,
+      officerName: String(body?.officerName || assigneeNames[0] || '').trim() || undefined,
+      portStaffId: roleGroup === 'BQL_CANG' ? String(body?.portStaffId || assigneeIds[0] || '').trim() || undefined : undefined,
+      portStaffName: roleGroup === 'BQL_CANG' ? String(body?.portStaffName || assigneeNames[0] || '').trim() || undefined : undefined,
+      phone: typeof body?.phone === 'string' && body.phone.trim() ? body.phone.trim().slice(0, 40) : undefined,
+      handoverNote:
+        typeof body?.handoverNote === 'string' && body.handoverNote.trim()
+          ? body.handoverNote.trim().slice(0, 500)
+          : undefined,
+      status,
+    };
+    return { shift };
+  };
+
+  app.get('/api/system/duty-shifts', requireActiveSession, (_req: Request, res: Response) => {
+    const data = readServerDutyShifts();
+    return res.json({ success: true, initialized: data.initialized, shifts: data.shifts });
+  });
+
+  app.post(
+    '/api/system/duty-shifts',
+    requireActiveSession,
+    requireMutationCsrfCheck,
+    (req: Request, res: Response) => {
+      try {
+        const result = sanitizeDutyShiftPayload(req.body || {});
+        if (result.error || !result.shift) {
+          return res.status(400).json({ success: false, message: result.error });
+        }
+        const { shifts } = readServerDutyShifts();
+        const existingIdx = shifts.findIndex((s) => s.id === result.shift!.id);
+        const nextShifts = [...shifts];
+        if (existingIdx >= 0) nextShifts[existingIdx] = result.shift;
+        else nextShifts.unshift(result.shift);
+        writeServerDutyShifts(nextShifts);
+        return res.status(201).json({ success: true, shift: result.shift, shifts: nextShifts });
+      } catch (err: any) {
+        return res.status(500).json({
+          success: false,
+          message: err?.message || 'Không thể tạo ca trực trên máy chủ.',
+        });
+      }
+    }
+  );
+
+  app.put(
+    '/api/system/duty-shifts/:id',
+    requireActiveSession,
+    requireMutationCsrfCheck,
+    (req: Request, res: Response) => {
+      try {
+        const targetId = String(req.params.id || '').trim();
+        if (!targetId) {
+          return res.status(400).json({ success: false, message: 'Thiếu mã ca trực cần cập nhật.' });
+        }
+        const result = sanitizeDutyShiftPayload(req.body || {}, targetId);
+        if (result.error || !result.shift) {
+          return res.status(400).json({ success: false, message: result.error });
+        }
+        const { shifts } = readServerDutyShifts();
+        const existingIdx = shifts.findIndex((s) => s.id === targetId);
+        const nextShifts = [...shifts];
+        if (existingIdx >= 0) nextShifts[existingIdx] = result.shift;
+        else nextShifts.unshift(result.shift);
+        writeServerDutyShifts(nextShifts);
+        return res.json({ success: true, shift: result.shift, shifts: nextShifts });
+      } catch (err: any) {
+        return res.status(500).json({
+          success: false,
+          message: err?.message || 'Không thể cập nhật ca trực trên máy chủ.',
+        });
+      }
+    }
+  );
+
+  app.delete(
+    '/api/system/duty-shifts/:id',
+    requireActiveSession,
+    requireMutationCsrfCheck,
+    (req: Request, res: Response) => {
+      try {
+        const targetId = String(req.params.id || '').trim();
+        if (!targetId) {
+          return res.status(400).json({ success: false, message: 'Thiếu mã ca trực cần xóa.' });
+        }
+        const { shifts } = readServerDutyShifts();
+        const nextShifts = shifts.filter((s) => s.id !== targetId);
+        writeServerDutyShifts(nextShifts);
+        return res.json({ success: true, deletedId: targetId, shifts: nextShifts });
+      } catch (err: any) {
+        return res.status(500).json({
+          success: false,
+          message: err?.message || 'Không thể xóa ca trực trên máy chủ.',
+        });
+      }
+    }
+  );
+
   app.use('/api/dossiers', requireActiveSession, requireMutationCsrfCheck);
 
   // 1. Thống kê toàn bộ thư mục hồ sơ đang lưu trên Server
