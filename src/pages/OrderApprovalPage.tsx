@@ -8,6 +8,7 @@ import { UserAccount, TripRecord } from '../types';
 import { repository } from '../services/repository';
 import { formatDateTime, getStatusInfo } from '../utils/formatters';
 import { normalizeStatus } from '../utils/userPermissions';
+import { isOfficeTrackingQueueStatus } from '../utils/systemMetrics';
 import { DigitalOrderA4 } from '../components/DigitalOrderA4';
 import { CoastalPageHero } from '../components/CoastalPageHero';
 import { OfficialFormsModal } from '../components/OfficialFormsModal';
@@ -66,10 +67,7 @@ export const OrderApprovalPage: React.FC<OrderApprovalPageProps> = ({
 
   const officeQueueTrips = useMemo(() => {
     return trips
-      .filter((t) => {
-        const st = normalizeStatus(t.status);
-        return st === 'DA_DUYET' || st === 'DANG_TRINH_OFFICE' || st === 'OFFICE_TRA_LAI';
-      })
+      .filter((t) => isOfficeTrackingQueueStatus(t.status))
       .sort((a, b) => (b.scheduledDepartureTime || '').localeCompare(a.scheduledDepartureTime || ''));
   }, [trips]);
 

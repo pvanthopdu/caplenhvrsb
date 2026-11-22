@@ -18,9 +18,13 @@ import {
 import { exportTripsToExcel } from '../utils/exportUtils';
 import {
   getUserAccessibleVesselIds,
-  isTripAccessibleToUser,
   normalizeStatus,
 } from '../utils/userPermissions';
+import {
+  getScopedTripsForUser,
+  isBqlQueueStatus,
+  isDeptProcessingStatus,
+} from '../utils/systemMetrics';
 import {
   Files,
   Search,
@@ -49,6 +53,7 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
   const vessels = repository.getVessels();
   const ports = repository.getPorts();
   const crewCatalog = repository.getCrew();
+  const adminConfig = repository.getAdminConfig();
 
   // Đăng ký lắng nghe repository và đồng hồ đếm lùi SLA thời gian thực
   useEffect(() => {
@@ -91,11 +96,10 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
 
   const timelineTrip = trips.find((t) => t.id === timelineTripId);
 
-  // Danh sách hồ sơ gốc thuộc phạm vi nhìn thấy của tài khoản
+  // Danh sách hồ sơ gốc thuộc phạm vi nhìn thấy của tài khoản (đồng bộ với Bảng điều khiển & Sidebar)
   const baseRoleTrips = useMemo(() => {
-    if (currentUser.role !== 'CAPTAIN') return trips;
-    return trips.filter((t) => isTripAccessibleToUser(currentUser, t, accessibleVesselIds));
-  }, [trips, currentUser, accessibleVesselIds]);
+    return getScopedTripsForUser(currentUser, trips, vessels, crewCatalog);
+  }, [trips, currentUser, vessels, crewCatalog]);
 
   // Ánh xạ trạng thái lệnh riêng cho từng hồ sơ theo vai trò tài khoản đang đăng nhập
   const roleStatusMap = useMemo(() => {
@@ -357,14 +361,8 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
               const st = normalizeStatus(trip.status);
               const bqlClk = repository.computeBqlClockMinutes(trip, currentTime);
               const deptClk = repository.computeDeptClockMinutes(trip, currentTime);
-              const showBqlClk = ['CHO_KIEM_TRA', 'TRA_BQL_CANG'].includes(st) && trip.submittedAt;
-              const showDeptClk = [
-                'DA_CHAP_THUAN',
-                'CHO_SO_XU_LY',
-                'DA_DUYET',
-                'DANG_TRINH_OFFICE',
-                'OFFICE_TRA_LAI',
-              ].includes(st) && Boolean(trip.approvalNotice?.issuedAt || trip.deptClock?.startedAt);
+              const showBqlClk = isBqlQueueStatus(st) && Boolean(trip.submittedAt);
+              const showDeptClk = isDeptProcessingStatus(st) && Boolean(trip.approvalNotice?.issuedAt || trip.deptClock?.startedAt);
               const latestCtrl = repository.getLatestKiemSoatForTrip(trip.id);
               const hasDiscrepancy = latestCtrl?.ketQua === 'chenh_lech';
               return (
@@ -407,7 +405,8 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                               : 'bg-blue-50 text-blue-800 border-blue-200'
                           }`}
                         >
-                          BQL: {formatClockDuration(bqlClk.netMinutes)} / 60p
+                          BQL: {formatClockDuration(bqlClk.netMinutes)} / {adminConfig.bqlProcessingSlaMinutes}p
+                          {bqlClk.isRed && bqlClk.overdueMinutes > 0 ? ` (Quá hạn +${bqlClk.overdueMinutes}p)` : ''}
                         </span>
                       )}
                       {showDeptClk && (
@@ -420,7 +419,8 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                               : 'bg-indigo-50 text-indigo-800 border-indigo-200'
                           }`}
                         >
-                          Sở: {formatClockDuration(deptClk.netMinutes)} / 60p
+                          Sở: {formatClockDuration(deptClk.netMinutes)} / {adminConfig.deptProcessingSlaMinutes}p
+                          {deptClk.isRed && deptClk.overdueMinutes > 0 ? ` (Quá hạn +${deptClk.overdueMinutes}p)` : ''}
                         </span>
                       )}
                       {hasDiscrepancy && currentUser.role !== 'CAPTAIN' && (
@@ -510,14 +510,8 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                   const st = normalizeStatus(trip.status);
                   const bqlClk = repository.computeBqlClockMinutes(trip, currentTime);
                   const deptClk = repository.computeDeptClockMinutes(trip, currentTime);
-                  const showBqlClk = ['CHO_KIEM_TRA', 'TRA_BQL_CANG'].includes(st) && trip.submittedAt;
-                  const showDeptClk = [
-                    'DA_CHAP_THUAN',
-                    'CHO_SO_XU_LY',
-                    'DA_DUYET',
-                    'DANG_TRINH_OFFICE',
-                    'OFFICE_TRA_LAI',
-                  ].includes(st) && Boolean(trip.approvalNotice?.issuedAt || trip.deptClock?.startedAt);
+                  const showBqlClk = isBqlQueueStatus(st) && Boolean(trip.submittedAt);
+                  const showDeptClk = isDeptProcessingStatus(st) && Boolean(trip.approvalNotice?.issuedAt || trip.deptClock?.startedAt);
                   const latestCtrl = repository.getLatestKiemSoatForTrip(trip.id);
                   const hasDiscrepancy = latestCtrl?.ketQua === 'chenh_lech';
                   return (
@@ -609,7 +603,8 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                                   : 'bg-blue-50 text-blue-800 border-blue-200'
                               }`}
                             >
-                              Đồng hồ BQL: {formatClockDuration(bqlClk.netMinutes)} / 60p
+                              Đồng hồ BQL: {formatClockDuration(bqlClk.netMinutes)} / {adminConfig.bqlProcessingSlaMinutes}p
+                              {bqlClk.isRed && bqlClk.overdueMinutes > 0 ? ` (Quá hạn +${bqlClk.overdueMinutes}p)` : ''}
                             </span>
                           )}
                           {showDeptClk && (
@@ -622,7 +617,8 @@ export const TripListPage: React.FC<TripListPageProps> = ({ currentUser, onNavig
                                   : 'bg-indigo-50 text-indigo-800 border-indigo-200'
                               }`}
                             >
-                              Đồng hồ Sở: {formatClockDuration(deptClk.netMinutes)} / 60p
+                              Đồng hồ Sở: {formatClockDuration(deptClk.netMinutes)} / {adminConfig.deptProcessingSlaMinutes}p
+                              {deptClk.isRed && deptClk.overdueMinutes > 0 ? ` (Quá hạn +${deptClk.overdueMinutes}p)` : ''}
                             </span>
                           )}
                           {trip.lastReturnInfo && ['TRA_CHU_TAU', 'TRA_BQL_CANG', 'OFFICE_TRA_LAI'].includes(st) && (

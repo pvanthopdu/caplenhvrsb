@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { UserAccount, IncomingDossier, IncomingDossierStatus, IncomingDossierSource } from '../types';
 import { repository } from '../services/repository';
-import { formatDateTime, getStatusInfo } from '../utils/formatters';
+import { formatDateTime, formatMetric1, getStatusInfo } from '../utils/formatters';
 import { normalizeStatus } from '../utils/userPermissions';
 import { TripTimelineTree } from '../components/TripTimelineTree';
 import { OfficialFormsModal } from '../components/OfficialFormsModal';
@@ -50,6 +50,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
 }) => {
   const [dossiers, setDossiers] = useState<IncomingDossier[]>(() => repository.getIncomingDossiers());
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
+  const deptLimit = repository.getAdminConfig().deptProcessingSlaMinutes || 60;
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [sourceFilter, setSourceFilter] = useState<string>('ALL');
@@ -84,23 +85,33 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  const isDossierOverdueLive = (d: IncomingDossier): boolean => {
+    if (d.status === 'APPROVED') return false;
+    const linkedTrip = repository.getTripById(d.tripId);
+    if (linkedTrip) {
+      const clk = repository.computeDeptClockMinutes(linkedTrip, currentTime);
+      return Boolean(d.isOverdue || clk.isRed);
+    }
+    return Boolean(d.isOverdue);
+  };
+
   // Thống kê nhanh
   const stats = useMemo(() => {
     const total = dossiers.length;
     const pendingIntake = dossiers.filter((d) => d.status === 'PENDING_INTAKE').length;
     const processing = dossiers.filter((d) => ['INTAKEN', 'PROCESSING'].includes(d.status)).length;
     const approved = dossiers.filter((d) => d.status === 'APPROVED').length;
-    const overdue = dossiers.filter((d) => d.isOverdue).length;
+    const overdue = dossiers.filter((d) => isDossierOverdueLive(d)).length;
 
     return { total, pendingIntake, processing, approved, overdue };
-  }, [dossiers]);
+  }, [dossiers, currentTime]);
 
   // Lọc danh sách
   const filteredDossiers = useMemo(() => {
     return dossiers.filter((d) => {
       if (statusFilter !== 'ALL') {
         if (statusFilter === 'OVERDUE') {
-          if (!d.isOverdue) return false;
+          if (!isDossierOverdueLive(d)) return false;
         } else if (d.status !== statusFilter) {
           return false;
         }
@@ -178,12 +189,12 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
   };
 
   // Trạng thái tiếp nhận
-  const getStatusBadge = (status: IncomingDossierStatus, isOverdue?: boolean) => {
+  const getStatusBadge = (status: IncomingDossierStatus, isOverdue?: boolean, overdueMinutes?: number) => {
     if (isOverdue && status !== 'APPROVED') {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-red-100 text-red-800 border border-red-300 animate-pulse">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-red-100 text-red-800 border border-red-300 animate-pulse tabular-nums">
           <AlertTriangle className="w-3 h-3 text-red-600" />
-          QUÁ HẠN 60 PHÚT
+          QUÁ HẠN {overdueMinutes && overdueMinutes > 0 ? `+${overdueMinutes} PHÚT` : `${deptLimit} PHÚT`}
         </span>
       );
     }
@@ -366,7 +377,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
             <div className="min-w-0 flex-1">
               <p className="text-[13px] font-extrabold text-[#3b1c7a] leading-snug truncate">Sở đang xử lý / Office</p>
               <div className="text-2xl sm:text-[28px] font-black text-[#5b21b6] leading-tight mt-0.5">{stats.processing}</div>
-              <p className="text-[11px] font-medium text-[#6d28d9] mt-0.5 truncate">Định mức đồng hồ Sở 60 phút</p>
+              <p className="text-[11px] font-medium text-[#6d28d9] mt-0.5 truncate">Định mức đồng hồ Sở {deptLimit} phút</p>
             </div>
             <span className="self-end w-6 h-6 rounded-full bg-[#dfd5ff] text-[#6d28d9] flex items-center justify-center shrink-0">
               <ArrowRight className="w-3.5 h-3.5" />
@@ -374,7 +385,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
           </div>
         </button>
 
-        {/* 4. Quá hạn đồng hồ Sở 60p */}
+        {/* 4. Quá hạn đồng hồ Sở */}
         <button
           type="button"
           onClick={() => setStatusFilter('OVERDUE')}
@@ -392,7 +403,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-extrabold text-[#7f1d1d] leading-snug truncate">Quá hạn định mức 60p</p>
+              <p className="text-[13px] font-extrabold text-[#7f1d1d] leading-snug truncate">Quá hạn định mức {deptLimit}p</p>
               <div className="text-2xl sm:text-[28px] font-black text-[#dc2626] leading-tight mt-0.5">{stats.overdue}</div>
               <p className="text-[11px] font-medium text-[#b91c1c] mt-0.5 truncate">Cần xử lý khẩn cấp</p>
             </div>
@@ -548,7 +559,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
                       </p>
                     </div>
                     <div className="shrink-0">
-                      {getStatusBadge(dossier.status, isRowOverdue)}
+                      {getStatusBadge(dossier.status, isRowOverdue, deptClock?.overdueMinutes)}
                     </div>
                   </div>
 
@@ -573,7 +584,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
                     {deptClock && (
                       <div className="pt-2 border-t border-[#dce8f7] space-y-1.5 tabular-nums">
                         <div className="flex justify-between items-center text-[11px] gap-2">
-                          <span className="font-bold text-[#07244d]">Đồng hồ Sở (60 phút)</span>
+                          <span className="font-bold text-[#07244d]">Đồng hồ Sở ({deptLimit} phút)</span>
                           <span
                             className={`font-mono font-extrabold px-2 py-0.5 rounded-full text-[11px] shrink-0 ${
                               deptClock.isRed
@@ -585,13 +596,18 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
                                 : 'bg-[#eaf2ff] text-[#0b4ea8]'
                             }`}
                           >
-                            {deptClock.netMinutes}/60p {deptClock.isPaused ? '(Tạm dừng)' : ''}
+                            {formatMetric1(deptClock.netMinutes)}/{deptLimit}p{' '}
+                            {deptClock.isRed && deptClock.overdueMinutes > 0
+                              ? `(Quá hạn +${deptClock.overdueMinutes}p)`
+                              : deptClock.isPaused
+                              ? '(Tạm dừng)'
+                              : ''}
                           </span>
                         </div>
                         <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full ${deptClock.isRed ? 'bg-[#ef4444]' : deptClock.isAmber ? 'bg-amber-500' : 'bg-[#0d62e8]'}`}
-                            style={{ width: `${Math.min(100, (deptClock.netMinutes / 60) * 100)}%` }}
+                            style={{ width: `${Math.min(100, (deptClock.netMinutes / deptLimit) * 100)}%` }}
                           />
                         </div>
                       </div>
@@ -665,7 +681,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
                 <th className="py-3.5 px-4">Số đến / Thời điểm đến</th>
                 <th className="py-3.5 px-3.5">Phương tiện &amp; Số ĐK</th>
                 <th className="py-3.5 px-3.5">Nguồn &amp; Người gửi</th>
-                <th className="py-3.5 px-3.5">Đồng hồ Sở (60p) &amp; Trạng thái</th>
+                <th className="py-3.5 px-3.5">Đồng hồ Sở ({deptLimit}p) &amp; Trạng thái</th>
                 <th className="py-3.5 px-3.5">Trạng thái tiếp nhận</th>
                 <th className="py-3.5 px-4 text-right">Thao tác</th>
               </tr>
@@ -756,7 +772,8 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
                                 }`}
                               >
                                 <Clock className="w-3 h-3 shrink-0" />
-                                {deptClock.netMinutes}/60p
+                                {formatMetric1(deptClock.netMinutes)}/{deptLimit}p
+                                {deptClock.isRed && deptClock.overdueMinutes > 0 ? ` (+${deptClock.overdueMinutes}p)` : ''}
                               </span>
                             </div>
 
@@ -769,13 +786,13 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
                                     ? 'bg-amber-500'
                                     : 'bg-[#0d62e8]'
                                 }`}
-                                style={{ width: `${Math.min(100, (deptClock.netMinutes / 60) * 100)}%` }}
+                                style={{ width: `${Math.min(100, (deptClock.netMinutes / deptLimit) * 100)}%` }}
                               />
                             </div>
 
                             <div className="flex items-center justify-between text-[11px] text-[#526c93] font-medium">
                               <span>{deptClock.isPaused ? 'Tạm dừng đồng hồ' : deptClock.isCompleted ? 'Đã xong đồng hồ Sở' : 'Đang tính giờ'}</span>
-                              <span>Trừ: {deptClock.pausedMinutes}p</span>
+                              <span>Trừ: {formatMetric1(deptClock.pausedMinutes)}p</span>
                             </div>
                           </div>
                         ) : (
@@ -787,7 +804,7 @@ export const IncomingDossierPage: React.FC<IncomingDossierPageProps> = ({
 
                       {/* Cột 5: Trạng thái tiếp nhận */}
                       <td className="py-4 px-3.5 align-top">
-                        <div>{getStatusBadge(dossier.status, isRowOverdue)}</div>
+                        <div>{getStatusBadge(dossier.status, isRowOverdue, deptClock?.overdueMinutes)}</div>
                         {isPostHold && (
                           <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-red-100 text-red-800 border border-red-300">
                             <Lock className="w-3 h-3 shrink-0" />

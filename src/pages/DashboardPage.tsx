@@ -12,12 +12,23 @@ import {
   normalizeStatus,
 } from '../types';
 import { repository } from '../services/repository';
-import { getRoleTripStatusInfo, formatDateTime, getRoleName } from '../utils/formatters';
+import {
+  getRoleTripStatusInfo,
+  formatDateTime,
+  formatMetric1,
+  getLocalIsoDate,
+  getRoleName,
+  roundOverdueMinutes,
+} from '../utils/formatters';
 import {
   ACTIVE_MONITORING_STATUSES,
-  getUserAccessibleVesselIds,
-  isTripAccessibleToUser,
 } from '../utils/userPermissions';
+import {
+  getScopedTripsForUser,
+  isBqlQueueStatus,
+  isDeptProcessingStatus,
+  isBpWaitControlStatus,
+} from '../utils/systemMetrics';
 import { TripTimelineTree } from '../components/TripTimelineTree';
 import { PaginationBar, usePagination } from '../components/PaginationBar';
 import heroSeaportImg from '../assets/images/hero_seaport_panorama_1795076039376.jpg';
@@ -119,24 +130,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     setTimeout(() => setLiveToast(null), 4000);
   };
 
-  const accessibleVesselIds = useMemo(
-    () => getUserAccessibleVesselIds(currentUser, vessels, crewCatalog),
-    [currentUser, vessels, crewCatalog]
+  const trips = useMemo(
+    () => getScopedTripsForUser(currentUser, allTrips, vessels, crewCatalog),
+    [allTrips, currentUser, vessels, crewCatalog]
   );
-
-  const trips = useMemo(() => {
-    if (currentUser.role === 'CAPTAIN') {
-      return allTrips.filter((t) => isTripAccessibleToUser(currentUser, t, accessibleVesselIds));
-    }
-    if (['PORT_STAFF', 'BP_TRUC', 'BP_CHIHUY'].includes(currentUser.role) && currentUser.assignedPortId) {
-      return allTrips.filter(
-        (t) =>
-          t.departurePortId === currentUser.assignedPortId ||
-          t.arrivalPortId === currentUser.assignedPortId
-      );
-    }
-    return allTrips;
-  }, [allTrips, currentUser, accessibleVesselIds]);
 
   const adminConfig = repository.getAdminConfig();
   const bqlLimit = adminConfig.bqlProcessingSlaMinutes || 60;
@@ -199,8 +196,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   );
 
   const stats = useMemo(() => {
-    const today = currentTime.toISOString().slice(0, 10);
-    const tripsToday = trips.filter((t) => t.createdDate === today);
+    const today = getLocalIsoDate(currentTime);
+    const tripsToday = trips.filter((t) => (t.createdDate || '').slice(0, 10) === today);
 
     let waitBql = 0;
     let waitDeptOffice = 0;
@@ -210,20 +207,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     let slaOrHoldAlertCount = 0;
 
     realTimeTripsEvaluation.forEach(({ trip, st, bqlClock, deptClock }) => {
-      if (st === 'CHO_KIEM_TRA' || st === 'TRA_BQL_CANG') {
+      if (isBqlQueueStatus(st)) {
         waitBql += 1;
-        if (bqlClock.netMinutes >= bqlLimit * 0.75) slaOrHoldAlertCount += 1;
-      } else if (
-        ['DA_CHAP_THUAN', 'CHO_SO_XU_LY', 'DA_DUYET', 'DANG_TRINH_OFFICE', 'OFFICE_TRA_LAI'].includes(st)
-      ) {
+        if (bqlClock.isAmber || bqlClock.isRed) slaOrHoldAlertCount += 1;
+      } else if (isDeptProcessingStatus(st)) {
         waitDeptOffice += 1;
-        if (deptClock.netMinutes >= deptLimit * 0.75) slaOrHoldAlertCount += 1;
-      } else if (st === 'DA_CAP_PHEP' || st === 'TAM_GIU_BIEN_PHONG') {
+        if (st !== 'TAM_DUNG_THOI_TIET' && (deptClock.isAmber || deptClock.isRed)) {
+          slaOrHoldAlertCount += 1;
+        }
+      } else if (isBpWaitControlStatus(st)) {
         waitBpControl += 1;
         if (st === 'TAM_GIU_BIEN_PHONG') slaOrHoldAlertCount += 1;
       } else if (st === 'DA_XUAT_BEN') {
         underwayCount += 1;
-      } else if (st === 'DA_CAP_BEN' && trip.createdDate === today) {
+      } else if (st === 'DA_CAP_BEN' && (trip.createdDate || '').slice(0, 10) === today) {
         completedToday += 1;
       }
     });
@@ -747,8 +744,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                                   : 'text-[#0a4ca8]'
                               }`}
                             >
-                              · {isBqlStage ? 'Đồng hồ BQL' : 'Đồng hồ Sở'}: {activeClockMins.toFixed(0)} /{' '}
+                              · {isBqlStage ? 'Đồng hồ BQL' : 'Đồng hồ Sở'}: {formatMetric1(activeClockMins)} /{' '}
                               {activeLimit} phút
+                              {isOverSla && ` (Quá hạn +${roundOverdueMinutes(activeClockMins - activeLimit)} phút)`}
                             </span>
                           )}
                         </div>
@@ -880,8 +878,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                                 : 'text-[#0a4ca8]'
                             }`}
                           >
-                            · {isBqlStage ? 'Đồng hồ BQL' : 'Đồng hồ Sở'}: {activeClockMins.toFixed(0)} /{' '}
+                            · {isBqlStage ? 'Đồng hồ BQL' : 'Đồng hồ Sở'}: {formatMetric1(activeClockMins)} /{' '}
                             {activeLimit} phút
+                            {isOverSla && ` (Quá hạn +${roundOverdueMinutes(activeClockMins - activeLimit)} phút)`}
                           </span>
                         )}
                       </div>

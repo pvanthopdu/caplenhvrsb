@@ -203,7 +203,7 @@ export class WeatherService {
       ].join('\n');
 
       // Tóm tắt khuyến nghị
-      const aiSummary = `Cập nhật thời gian thực lúc ${timeFormatted}: Vùng biển Lý Sơn gió ${windDirText} cấp ${beaufort} (${windKmh.toFixed(0)} km/h), sóng biển ${waveHeight.toFixed(1)}m. ${
+      const aiSummary = `Cập nhật thời gian thực lúc ${timeFormatted}: Vùng biển Lý Sơn gió ${windDirText} cấp ${beaufort} (${windKmh.toFixed(1)} km/h), sóng biển ${waveHeight.toFixed(1)}m. ${
         beaufort >= 6
           ? 'Thời tiết nguy hiểm, vượt ngưỡng an toàn VR-SB!'
           : beaufort === 5

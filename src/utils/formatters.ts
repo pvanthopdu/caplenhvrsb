@@ -65,16 +65,58 @@ export function formatTime(timeString?: string): string {
   }
 }
 
+/**
+ * Làm tròn lên không có phần thập phân dành riêng cho tham số thời gian Quá hạn (phút).
+ * VD: 0.1 -> 1, 12.3 -> 13, 15.0 -> 15.
+ */
+export function roundOverdueMinutes(minutes: number): number {
+  if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+  return Math.ceil(minutes);
+}
+
+/**
+ * Làm tròn đến 1 chữ số thập phân dành cho toàn bộ các tham số tính toán khác.
+ * VD: 12.34 -> 12.3, 85.67 -> 85.7.
+ */
+export function roundMetric1(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round((value + Number.EPSILON) * 10) / 10;
+}
+
+/**
+ * Định dạng tham số tính toán đến 1 chữ số thập phân.
+ */
+export function formatMetric1(value: number): string {
+  return roundMetric1(value).toFixed(1);
+}
+
+/**
+ * Định dạng thời gian quá hạn (luôn làm tròn lên số nguyên, không có phần thập phân).
+ */
+export function formatOverdueDuration(minutes: number): string {
+  const ceilMins = roundOverdueMinutes(minutes);
+  return `${ceilMins} phút`;
+}
+
+/**
+ * Lấy chuỗi ngày YYYY-MM-DD theo múi giờ địa phương (tránh lệch ngày do UTC của toISOString).
+ */
+export function getLocalIsoDate(date: Date = new Date()): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export function formatClockDuration(minutes: number): string {
-  if (!Number.isFinite(minutes) || minutes < 0) return '0 phút';
-  const whole = Math.floor(minutes);
-  const secs = Math.round((minutes - whole) * 60);
-  if (whole >= 60) {
-    const h = Math.floor(whole / 60);
-    const m = whole % 60;
-    return `${h}g ${String(m).padStart(2, '0')}p`;
+  if (!Number.isFinite(minutes) || minutes < 0) return '0.0 phút';
+  const rounded = roundMetric1(minutes);
+  if (rounded >= 60) {
+    const h = Math.floor(rounded / 60);
+    const rem = roundMetric1(rounded - h * 60);
+    return `${h}g ${rem.toFixed(1)}p`;
   }
-  return secs > 0 && whole < 5 ? `${whole}p ${secs}s` : `${whole} phút`;
+  return `${rounded.toFixed(1)} phút`;
 }
 
 export function maskIdNumber(idNumber?: string): string {

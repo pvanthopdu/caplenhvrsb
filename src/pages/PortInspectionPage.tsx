@@ -14,7 +14,8 @@ import {
 } from '../types';
 import { repository } from '../services/repository';
 import { getUserAssignedPortId } from '../utils/userPermissions';
-import { formatDateTime, getStatusInfo, getReturnScopeLabel } from '../utils/formatters';
+import { formatDateTime, formatMetric1, getStatusInfo, getReturnScopeLabel } from '../utils/formatters';
+import { isBqlQueueStatus } from '../utils/systemMetrics';
 import { OfficialFormsModal } from '../components/OfficialFormsModal';
 import { CoastalPageHero } from '../components/CoastalPageHero';
 import { SearchableSelect } from '../components/SearchableSelect';
@@ -174,7 +175,13 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
   const userPortId = getUserAssignedPortId(currentUser);
 
   const inspectableTrips = trips
-    .filter((t) => ['CHO_KIEM_TRA', 'TRA_BQL_CANG'].includes(normalizeStatus(t.status)))
+    .filter((t) => {
+      if (!isBqlQueueStatus(t.status)) return false;
+      if (currentUser.role === 'PORT_STAFF' && userPortId) {
+        return t.departurePortId === userPortId || t.arrivalPortId === userPortId;
+      }
+      return true;
+    })
     .sort((a, b) => {
       const aOwn = !userPortId || a.departurePortId === userPortId ? 0 : 1;
       const bOwn = !userPortId || b.departurePortId === userPortId ? 0 : 1;
@@ -666,7 +673,7 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
         badge={
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full bg-[#f4cf47] text-[#072b61] text-[10px] font-black uppercase">
-              Phụ lục 01 • Định mức 60 phút
+              Phụ lục 01 • Định mức {adminConfig.bqlProcessingSlaMinutes} phút
             </span>
             <span className="text-[11px] text-blue-100 font-semibold">
               {currentUser.department || 'Ban Quản lý Cảng tỉnh Quảng Ngãi'}
@@ -683,13 +690,13 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
                 searchPlaceholder="Tìm mã hồ sơ, tên tàu, số đăng ký..."
                 options={trips.map((t) => {
                   const stInfo = getStatusInfo(t.status);
-                  const st = normalizeStatus(t.status);
+                  const isInBqlQueue = isBqlQueueStatus(t.status);
                   return {
                     value: t.id,
                     label: `${t.tripNumber} - ${t.vesselName} (${stInfo.label})`,
                     subLabel: `${t.vesselRegNumber} • ${t.routeName} • ${t.passengerCount} khách`,
-                    badgeText: st === 'CHO_KIEM_TRA' || st === 'TRA_BQL_CANG' ? stInfo.label : undefined,
-                    isHighlighted: st === 'CHO_KIEM_TRA' || st === 'TRA_BQL_CANG',
+                    badgeText: isInBqlQueue ? stInfo.label : undefined,
+                    isHighlighted: isInBqlQueue,
                     searchText: `${t.tripNumber} ${t.vesselName} ${t.vesselRegNumber} ${t.captainName} ${t.routeName}`,
                   };
                 })}
@@ -727,17 +734,22 @@ export const PortInspectionPage: React.FC<PortInspectionPageProps> = ({
                   Đồng hồ xử lý BQL Cảng (Định mức {adminConfig.bqlProcessingSlaMinutes} phút)
                 </p>
                 <p className="text-[11px] opacity-90">
-                  Tổng: <strong className="tabular-nums">{bqlClock.rawMinutes}p</strong> • Tạm dừng:{' '}
-                  <strong className="tabular-nums">{bqlClock.pausedMinutes}p</strong> • Trạng thái:{' '}
+                  Tổng: <strong className="tabular-nums">{formatMetric1(bqlClock.rawMinutes)}p</strong> • Tạm dừng:{' '}
+                  <strong className="tabular-nums">{formatMetric1(bqlClock.pausedMinutes)}p</strong> • Trạng thái:{' '}
                   <strong>
                     {bqlClock.isCompleted ? 'Đã chốt' : bqlClock.isPaused ? 'Đang tạm dừng' : 'Đang đếm giờ'}
                   </strong>
+                  {bqlClock.isRed && bqlClock.overdueMinutes > 0 && (
+                    <span className="ml-1 font-black text-rose-700">
+                      • Quá hạn +{bqlClock.overdueMinutes} phút
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
             <div className="text-right shrink-0">
               <span className="text-lg font-black tabular-nums">
-                {bqlClock.netMinutes} / {adminConfig.bqlProcessingSlaMinutes}p
+                {formatMetric1(bqlClock.netMinutes)} / {adminConfig.bqlProcessingSlaMinutes}p
               </span>
             </div>
           </div>

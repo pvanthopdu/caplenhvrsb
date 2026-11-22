@@ -19,7 +19,12 @@ import {
 } from './services/sessionManager';
 import { UserAccount, WeatherCondition } from './types';
 import { repository } from './services/repository';
-import { normalizeStatus } from './utils/userPermissions';
+import {
+  getScopedTripsForUser,
+  isBqlQueueStatus,
+  isDeptProcessingStatus,
+  isOfficeTrackingQueueStatus,
+} from './utils/systemMetrics';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 import { AiAssistantDrawer } from './components/AiAssistantDrawer';
@@ -537,24 +542,17 @@ export default function App() {
     );
   }
 
-  const trips = repository.getTrips();
+  const allTrips = repository.getTrips();
+  const trips = getScopedTripsForUser(
+    activeSessionUser,
+    allTrips,
+    repository.getVessels(),
+    repository.getCrew()
+  );
   const incomingDossiers = repository.getIncomingDossiers();
-  const pendingLeaderCount = trips.filter((t) =>
-    ['DA_DUYET', 'DANG_TRINH_OFFICE', 'OFFICE_TRA_LAI'].includes(normalizeStatus(t.status))
-  ).length;
-  const inspectingCount = trips.filter((t) =>
-    ['CHO_KIEM_TRA', 'TRA_BQL_CANG'].includes(normalizeStatus(t.status))
-  ).length;
-  const deptProcessingCount = trips.filter((t) =>
-    [
-      'DA_CHAP_THUAN',
-      'CHO_SO_XU_LY',
-      'DA_DUYET',
-      'DANG_TRINH_OFFICE',
-      'OFFICE_TRA_LAI',
-      'TAM_DUNG_THOI_TIET',
-    ].includes(normalizeStatus(t.status))
-  ).length;
+  const pendingLeaderCount = trips.filter((t) => isOfficeTrackingQueueStatus(t.status)).length;
+  const inspectingCount = trips.filter((t) => isBqlQueueStatus(t.status)).length;
+  const deptProcessingCount = trips.filter((t) => isDeptProcessingStatus(t.status)).length;
   const incomingPendingCount = incomingDossiers.filter((d) => d.status === 'PENDING_INTAKE').length;
   const unreadNotiCount = repository.getNotifications(activeSessionUser.id, activeSessionUser.role).filter((n) => !n.isRead).length;
 

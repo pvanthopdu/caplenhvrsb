@@ -742,3 +742,143 @@ export async function downloadOrderPdf(elementId: string, fileName: string): Pro
   pdf.save(fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`);
   return true;
 }
+
+/**
+ * Tạo tệp PDF Giấy phép rời cảng khổ A4 (hỗ trợ đầy đủ tiếng Việt qua Canvas)
+ * để tự động lưu trữ vào Server khi hồ sơ được duyệt hoặc phát hành giấy phép.
+ */
+export function buildPermitArchivePdfBlob(
+  trip: TripRecord,
+  vessel?: Vessel
+): { fileName: string; blob: Blob } {
+  const signerCfg = repository.getPermitSignerConfig();
+  const signerName =
+    !trip.approvedByName ||
+    trip.approvedByName === 'Phạm Minh Đức' ||
+    trip.approvedByName === 'Lãnh đạo Sở Xây dựng'
+      ? signerCfg.name
+      : trip.approvedByName;
+  const permitNo = trip.orderNumber || `DU_THAO_${trip.tripNumber}`;
+  const safePermitNo = permitNo.replace(/[\/\\\s]+/g, '_');
+  const fileName = trip.orderNumber
+    ? `Giay_Phep_Roi_Cang_${safePermitNo}.pdf`
+    : `Du_Thao_Giay_Phep_${trip.tripNumber}.pdf`;
+
+  const pdf = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  });
+
+  if (typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1240;
+    canvas.height = 1754;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Khung viền trang chuẩn giấy phép
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(56, 56, canvas.width - 112, canvas.height - 112);
+
+      ctx.fillStyle = '#0f172a';
+      ctx.textAlign = 'center';
+      ctx.font = 'normal 22px "Times New Roman", serif';
+      ctx.fillText('ỦY BAN NHÂN DÂN TỈNH QUẢNG NGÃI', 330, 125);
+      ctx.font = 'bold 24px "Times New Roman", serif';
+      ctx.fillText('SỞ XÂY DỰNG', 330, 160);
+      ctx.font = 'normal 21px "Times New Roman", serif';
+      ctx.fillText(`Số: ${trip.orderNumber || '(Dự thảo trình Office)'}`, 330, 200);
+
+      ctx.font = 'bold 22px "Times New Roman", serif';
+      ctx.fillText('CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM', 890, 125);
+      ctx.font = 'bold 23px "Times New Roman", serif';
+      ctx.fillText('Độc lập - Tự do - Hạnh phúc', 890, 160);
+      ctx.fillRect(745, 170, 290, 2);
+
+      const issuedRef = trip.issuedAt ? new Date(trip.issuedAt) : new Date();
+      const dd = String(issuedRef.getDate()).padStart(2, '0');
+      const mm = String(issuedRef.getMonth() + 1).padStart(2, '0');
+      const yyyy = issuedRef.getFullYear();
+      ctx.font = 'italic 21px "Times New Roman", serif';
+      ctx.fillText(`Quảng Ngãi, ngày ${dd} tháng ${mm} năm ${yyyy}`, 890, 208);
+
+      ctx.font = 'bold 34px "Times New Roman", serif';
+      ctx.fillText('GIẤY PHÉP RỜI CẢNG, BẾN THỦY NỘI ĐỊA', canvas.width / 2, 300);
+      ctx.font = 'bold 24px "Times New Roman", serif';
+      ctx.fillText('(PORT CLEARANCE — TUYẾN VR-SB ĐẢO LỚN – ĐẢO BÉ)', canvas.width / 2, 340);
+
+      // Nội dung chính
+      ctx.textAlign = 'left';
+      const rows: Array<[string, string]> = [
+        ['Mã hồ sơ chuyến:', trip.tripNumber],
+        ['Tên phương tiện / Số đăng ký:', `${trip.vesselName} (${trip.vesselRegNumber})`],
+        ['Loại phương tiện / Hô hiệu:', `${vessel?.vesselType || 'Tàu khách VR-SB'} · ${trip.callSign || vessel?.callSign || '---'}`],
+        ['Thuyền trưởng:', trip.captainName || '---'],
+        ['Tuyến hành trình:', trip.routeName || `${trip.departurePortName} → ${trip.arrivalPortName}`],
+        ['Bến rời → Bến đến:', `${trip.departurePortName} → ${trip.arrivalPortName}`],
+        ['Thời gian rời bến dự kiến:', `${formatTime(trip.scheduledDepartureTime)} ngày ${formatDate(trip.scheduledDepartureTime)}`],
+        ['Số thuyền viên / Hành khách:', `${trip.crewMembers?.length || 0} thuyền viên · ${trip.passengerCount || 0} hành khách`],
+        ['Khối lượng hàng hóa:', `${Number(trip.cargoTons || 0).toFixed(1)} tấn`],
+        ['Hiệu lực Giấy phép (24 giờ):', trip.orderValidUntil ? `${formatTime(trip.orderValidUntil)} ngày ${formatDate(trip.orderValidUntil)}` : 'Theo quy định 24 giờ kể từ lúc phát hành'],
+        ['Mã xác thực QR:', trip.verificationCode || trip.orderNumber || trip.tripNumber],
+        [
+          'Kiểm tra thời tiết (R7):',
+          trip.weatherCheckRecord
+            ? `Gió cấp ${trip.weatherCheckRecord.windForceBeaufort}, sóng ${Number(trip.weatherCheckRecord.waveHeightMeters).toFixed(1)}m (${trip.weatherCheckRecord.isSafe ? 'Đạt an toàn' : 'Không đạt'}) — ${trip.weatherCheckRecord.checkedByName}`
+            : 'Đã ghi nhận theo thời gian thực',
+        ],
+      ];
+
+      let y = 420;
+      for (const [label, value] of rows) {
+        ctx.font = 'bold 23px "Times New Roman", serif';
+        ctx.fillText(label, 105, y);
+        ctx.font = 'normal 23px "Times New Roman", serif';
+        ctx.fillText(String(value).slice(0, 68), 475, y);
+        y += 58;
+      }
+
+      // Khối chữ ký
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 23px "Times New Roman", serif';
+      if (signerCfg.authority) {
+        ctx.fillText(signerCfg.authority, 890, 1260);
+        ctx.fillText(signerCfg.title, 890, 1295);
+      } else {
+        ctx.fillText(signerCfg.title, 890, 1275);
+      }
+      ctx.font = 'italic 20px "Times New Roman", serif';
+      ctx.fillText('(Bản lưu trữ điện tử tự động trên Server theo quy định 5 năm)', 890, 1335);
+      ctx.font = 'bold 26px "Times New Roman", serif';
+      ctx.fillText(signerName, 890, 1465);
+
+      // Chân trang lưu trữ
+      ctx.textAlign = 'left';
+      ctx.font = 'italic 18px "Times New Roman", serif';
+      ctx.fillStyle = '#475569';
+      ctx.fillText(
+        `Lưu trữ tự động trên Server: CAPLENHVAORA/${trip.tripNumber}/lenh-cap-phep/${fileName}`,
+        105,
+        1625
+      );
+      ctx.fillText(
+        'Thời hạn lưu trữ: 05 năm theo quy định chứng từ hàng hải · Ẩn danh dữ liệu cá nhân sau 12 tháng (NĐ 356/2025/NĐ-CP).',
+        105,
+        1658
+      );
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.92);
+      pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+    }
+  }
+
+  return {
+    fileName,
+    blob: pdf.output('blob'),
+  };
+}
+

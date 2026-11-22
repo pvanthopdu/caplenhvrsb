@@ -20,6 +20,7 @@ import {
   PortId,
   Passenger,
   IncomingDossier,
+  IncomingDossierStatus,
   IncomingDossierSource,
   BpSystemConfig,
   BpStopReasonCode,
@@ -79,6 +80,7 @@ import {
 import { dossierArchiveService } from './dossierArchiveService';
 import { RulesEngine } from './rulesEngine';
 import { buildFourCanonicalTrips } from '../config/canonicalTrips';
+import { roundMetric1, roundOverdueMinutes } from '../utils/formatters';
 
 const CURRENT_DATA_VERSION = 'vrsb_2026_deploy_v9_spec';
 const VESSEL_CATALOG_VERSION = 'vrsb_vessels_lyson_11_2026_11';
@@ -130,6 +132,7 @@ export interface ClockMetricsResult {
   rawMinutes: number;
   pausedMinutes: number;
   netMinutes: number;
+  overdueMinutes: number;
   isPaused: boolean;
   isCompleted: boolean;
   isAmber: boolean;
@@ -1713,7 +1716,8 @@ class Repository {
   private computeClockResult(
     clock: ProcessingClockState | undefined,
     fallbackStartIso?: string,
-    now: Date = new Date()
+    now: Date = new Date(),
+    limitMinutes = 60
   ): ClockMetricsResult {
     const startedIso = clock?.startedAt || fallbackStartIso;
     if (!startedIso) {
@@ -1721,6 +1725,7 @@ class Repository {
         rawMinutes: 0,
         pausedMinutes: 0,
         netMinutes: 0,
+        overdueMinutes: 0,
         isPaused: false,
         isCompleted: false,
         isAmber: false,
@@ -1729,7 +1734,8 @@ class Repository {
     }
     const startMs = new Date(startedIso).getTime();
     const endMs = clock?.completedAt ? new Date(clock.completedAt).getTime() : now.getTime();
-    const rawMinutes = Math.max(0, Math.round(((endMs - startMs) / 60000) * 10) / 10);
+    const rawMinutesExact = Math.max(0, (endMs - startMs) / 60000);
+    const rawMinutes = roundMetric1(rawMinutesExact);
 
     let pausedMs = 0;
     (clock?.pausedIntervals || []).forEach((iv) => {
@@ -1739,8 +1745,12 @@ class Repository {
         pausedMs += Math.min(pe, endMs) - Math.max(ps, startMs);
       }
     });
-    const pausedMinutes = Math.max(0, Math.round((pausedMs / 60000) * 10) / 10);
-    const netMinutes = Math.max(0, Math.round((rawMinutes - pausedMinutes) * 10) / 10);
+    const pausedMinutesExact = Math.max(0, pausedMs / 60000);
+    const pausedMinutes = roundMetric1(pausedMinutesExact);
+    const netMinutesExact = Math.max(0, rawMinutesExact - pausedMinutesExact);
+    const netMinutes = roundMetric1(netMinutesExact);
+    const limit = Math.max(1, limitMinutes || 60);
+    const overdueMinutes = netMinutesExact > limit ? roundOverdueMinutes(netMinutesExact - limit) : 0;
     const isPaused = Boolean(clock?.pausedAt && !clock?.completedAt);
     const isCompleted = Boolean(clock?.completedAt);
 
@@ -1748,19 +1758,22 @@ class Repository {
       rawMinutes,
       pausedMinutes,
       netMinutes,
+      overdueMinutes,
       isPaused,
       isCompleted,
-      isAmber: netMinutes > 45 && netMinutes <= 60,
-      isRed: netMinutes > 60,
+      isAmber: netMinutesExact >= limit * 0.75 && netMinutesExact <= limit,
+      isRed: netMinutesExact > limit,
     };
   }
 
   public computeBqlClockMinutes(trip: TripRecord, now: Date = new Date()): ClockMetricsResult {
-    return this.computeClockResult(trip.bqlClock, trip.submittedAt, now);
+    const bqlLimit = this.getAdminConfig().bqlProcessingSlaMinutes || 60;
+    return this.computeClockResult(trip.bqlClock, trip.submittedAt, now, bqlLimit);
   }
 
   public computeDeptClockMinutes(trip: TripRecord, now: Date = new Date()): ClockMetricsResult {
-    return this.computeClockResult(trip.deptClock, trip.approvalNotice?.issuedAt, now);
+    const deptLimit = this.getAdminConfig().deptProcessingSlaMinutes || 60;
+    return this.computeClockResult(trip.deptClock, trip.approvalNotice?.issuedAt, now, deptLimit);
   }
 
   public evaluateTripPhaseRealtime(
@@ -1774,6 +1787,7 @@ class Repository {
     elapsedMinutes: number;
     totalElapsedMinutes: number;
     remainingMinutes: number;
+    overdueMinutes: number;
   } {
     const st = normalizeStatus(trip.status);
     const cfg = this.getAdminConfig();
@@ -1784,15 +1798,16 @@ class Repository {
 
     if (st === 'CHO_KIEM_TRA' || st === 'TRA_BQL_CANG') {
       const elapsed = bqlClock.netMinutes;
-      const overdue = elapsed > bqlLimit;
+      const overdue = bqlClock.isRed;
       return {
         activePhaseIndex: 1,
-        activePhaseName: 'BQL Cảng kiểm tra (≤ 60p)',
+        activePhaseName: `BQL Cảng kiểm tra (≤ ${bqlLimit}p)`,
         isPhaseOverdue: overdue,
         isTripOverdue: overdue,
         elapsedMinutes: elapsed,
         totalElapsedMinutes: elapsed,
-        remainingMinutes: Math.max(0, Math.round((bqlLimit - elapsed) * 10) / 10),
+        remainingMinutes: Math.max(0, roundMetric1(bqlLimit - elapsed)),
+        overdueMinutes: bqlClock.overdueMinutes,
       };
     }
 
@@ -1804,15 +1819,16 @@ class Repository {
       st === 'OFFICE_TRA_LAI'
     ) {
       const elapsed = deptClock.netMinutes;
-      const overdue = elapsed > deptLimit;
+      const overdue = deptClock.isRed;
       return {
         activePhaseIndex: 2,
-        activePhaseName: 'Sở Xây dựng & Office (≤ 60p)',
+        activePhaseName: `Sở Xây dựng & Office (≤ ${deptLimit}p)`,
         isPhaseOverdue: overdue,
-        isTripOverdue: overdue || bqlClock.netMinutes > bqlLimit,
+        isTripOverdue: overdue || bqlClock.isRed,
         elapsedMinutes: elapsed,
-        totalElapsedMinutes: Math.round((bqlClock.netMinutes + elapsed) * 10) / 10,
-        remainingMinutes: Math.max(0, Math.round((deptLimit - elapsed) * 10) / 10),
+        totalElapsedMinutes: roundMetric1(bqlClock.netMinutes + elapsed),
+        remainingMinutes: Math.max(0, roundMetric1(deptLimit - elapsed)),
+        overdueMinutes: deptClock.overdueMinutes,
       };
     }
 
@@ -1821,10 +1837,11 @@ class Repository {
         activePhaseIndex: 3,
         activePhaseName: 'Biên phòng kiểm soát xuất bến',
         isPhaseOverdue: false,
-        isTripOverdue: Boolean(trip.isOverallOverdue),
+        isTripOverdue: Boolean(trip.isOverallOverdue || bqlClock.isRed || deptClock.isRed),
         elapsedMinutes: 0,
-        totalElapsedMinutes: Math.round((bqlClock.netMinutes + deptClock.netMinutes) * 10) / 10,
+        totalElapsedMinutes: roundMetric1(bqlClock.netMinutes + deptClock.netMinutes),
         remainingMinutes: 0,
+        overdueMinutes: Math.max(bqlClock.overdueMinutes, deptClock.overdueMinutes),
       };
     }
 
@@ -1832,10 +1849,11 @@ class Repository {
       activePhaseIndex: 0,
       activePhaseName: st,
       isPhaseOverdue: false,
-      isTripOverdue: Boolean(trip.isOverallOverdue),
+      isTripOverdue: Boolean(trip.isOverallOverdue || bqlClock.isRed || deptClock.isRed),
       elapsedMinutes: 0,
-      totalElapsedMinutes: Math.round((bqlClock.netMinutes + deptClock.netMinutes) * 10) / 10,
+      totalElapsedMinutes: roundMetric1(bqlClock.netMinutes + deptClock.netMinutes),
       remainingMinutes: 0,
+      overdueMinutes: Math.max(bqlClock.overdueMinutes, deptClock.overdueMinutes),
     };
   }
 
@@ -1937,15 +1955,20 @@ class Repository {
   }
 
   public saveTrip(trip: TripRecord): TripRecord {
+    const normalizedStatus = normalizeStatus(trip.status);
+    const bqlClk = this.computeBqlClockMinutes(trip);
+    const deptClk = this.computeDeptClockMinutes(trip);
     const normalizedTrip: TripRecord = {
       ...trip,
-      status: normalizeStatus(trip.status),
+      status: normalizedStatus,
+      isOverallOverdue: Boolean(trip.isOverallOverdue || bqlClk.isRed || deptClk.isRed),
     };
     const trips = this.getTrips();
     const index = trips.findIndex((t) => t.id === normalizedTrip.id);
     if (index >= 0) trips[index] = normalizedTrip;
     else trips.unshift(normalizedTrip);
     this.setItem(STORAGE_KEYS.TRIPS, trips);
+    this.syncIncomingDossierForTrip(normalizedTrip);
     this.syncLiveTripToKpiEvents(normalizedTrip);
     this.emitUserMutation();
     const linkedIncoming = this.getIncomingDossiers().find(
@@ -1958,6 +1981,20 @@ class Repository {
   public deleteTrip(id: string): boolean {
     const trips = this.getTrips();
     this.setItem(STORAGE_KEYS.TRIPS, trips.filter((t) => t.id !== id));
+    const incoming = this.getItem<IncomingDossier[]>(STORAGE_KEYS.INCOMING_DOSSIERS, []);
+    if (incoming.some((d) => d.tripId === id)) {
+      this.setItem(
+        STORAGE_KEYS.INCOMING_DOSSIERS,
+        incoming.filter((d) => d.tripId !== id)
+      );
+    }
+    const kpiEvents = this.getItem<KpiEventRecord[]>(STORAGE_KEYS.KPI_EVENTS, []);
+    if (kpiEvents.some((e) => e.hoSoId === id)) {
+      this.setItem(
+        STORAGE_KEYS.KPI_EVENTS,
+        kpiEvents.filter((e) => e.hoSoId !== id)
+      );
+    }
     this.emitUserMutation();
     return true;
   }
@@ -4314,18 +4351,97 @@ class Repository {
   }
 
   // =================== SỔ HỒ SƠ ĐẾN ===================
+  private deriveIncomingStatusFromTrip(
+    trip: TripRecord,
+    currentStatus?: IncomingDossierStatus
+  ): IncomingDossierStatus {
+    const st = normalizeStatus(trip.status);
+    if (st === 'DA_CAP_PHEP' || st === 'TAM_GIU_BIEN_PHONG' || st === 'DA_XUAT_BEN' || st === 'DA_CAP_BEN') {
+      return 'APPROVED';
+    }
+    if (
+      st === 'TRA_CHU_TAU' ||
+      st === 'TRA_BQL_CANG' ||
+      st === 'KHONG_CHAP_THUAN' ||
+      st === 'THU_HOI' ||
+      st === 'DA_RUT' ||
+      st === 'HET_HIEU_LUC'
+    ) {
+      return 'REJECTED';
+    }
+    if (st === 'DA_CHAP_THUAN') {
+      return currentStatus === 'INTAKEN' || currentStatus === 'PROCESSING' ? currentStatus : 'PENDING_INTAKE';
+    }
+    if (['CHO_SO_XU_LY', 'DA_DUYET', 'DANG_TRINH_OFFICE', 'OFFICE_TRA_LAI', 'TAM_DUNG_THOI_TIET'].includes(st)) {
+      return currentStatus === 'INTAKEN' ? 'INTAKEN' : 'PROCESSING';
+    }
+    return currentStatus || 'PENDING_INTAKE';
+  }
+
+  private syncIncomingDossierForTrip(trip: TripRecord): void {
+    const rawList = this.getItem<IncomingDossier[]>(STORAGE_KEYS.INCOMING_DOSSIERS, []);
+    const idx = rawList.findIndex((d) => d.tripId === trip.id || d.tripNumber === trip.tripNumber);
+    if (idx < 0) return;
+
+    const existing = rawList[idx];
+    const nextStatus = this.deriveIncomingStatusFromTrip(trip, existing.status);
+    const deptClock = this.computeDeptClockMinutes(trip);
+    const nextOverdue = nextStatus !== 'APPROVED' && deptClock.isRed;
+    const nextDocsCount = trip.uploadedDocuments?.length ?? existing.documentsCount;
+    const nextDeadline = this.getAdminConfig().deptProcessingSlaMinutes || 60;
+
+    if (
+      existing.status !== nextStatus ||
+      existing.isOverdue !== nextOverdue ||
+      existing.vesselName !== trip.vesselName ||
+      existing.vesselRegNumber !== trip.vesselRegNumber ||
+      existing.documentsCount !== nextDocsCount ||
+      existing.deadlineMinutes !== nextDeadline
+    ) {
+      rawList[idx] = {
+        ...existing,
+        status: nextStatus,
+        isOverdue: nextOverdue,
+        vesselName: trip.vesselName,
+        vesselRegNumber: trip.vesselRegNumber,
+        documentsCount: nextDocsCount,
+        deadlineMinutes: nextDeadline,
+      };
+      this.setItem(STORAGE_KEYS.INCOMING_DOSSIERS, rawList);
+    }
+  }
+
   public getIncomingDossiers(): IncomingDossier[] {
     const rawList = this.getItem<IncomingDossier[]>(STORAGE_KEYS.INCOMING_DOSSIERS, []);
-    return rawList.map((d) => {
-      const legacySource = d.source as string;
-      const normalizedSource: IncomingDossierSource =
-        legacySource === 'ZALO_OA' ? 'PORT_GATEWAY' : d.source;
-      return {
-        ...d,
-        source: normalizedSource,
-        notes: d.notes?.replace(/Zalo[^\w]*/gi, 'Cổng ứng dụng '),
-      };
+    const trips = this.getTrips();
+    const tripById = new Map<string, TripRecord>();
+    const tripByNumber = new Map<string, TripRecord>();
+    trips.forEach((t) => {
+      tripById.set(t.id, t);
+      tripByNumber.set(t.tripNumber, t);
     });
+
+    return rawList
+      .filter((d) => tripById.has(d.tripId) || tripByNumber.has(d.tripNumber))
+      .map((d) => {
+        const legacySource = d.source as string;
+        const normalizedSource: IncomingDossierSource =
+          legacySource === 'ZALO_OA' ? 'PORT_GATEWAY' : d.source;
+        const linked = tripById.get(d.tripId) || tripByNumber.get(d.tripNumber);
+        const syncedStatus = linked
+          ? this.deriveIncomingStatusFromTrip(linked, d.status)
+          : d.status;
+        const syncedOverdue =
+          syncedStatus !== 'APPROVED' &&
+          (linked ? this.computeDeptClockMinutes(linked).isRed : Boolean(d.isOverdue));
+        return {
+          ...d,
+          source: normalizedSource,
+          status: syncedStatus,
+          isOverdue: syncedOverdue,
+          notes: d.notes?.replace(/Zalo[^\w]*/gi, 'Cổng ứng dụng '),
+        };
+      });
   }
 
   public getIncomingDossierById(id: string): IncomingDossier | undefined {
@@ -4726,7 +4842,7 @@ class Repository {
     return {
       totalBytes,
       quotaBytes,
-      usagePercent: Math.min(100, Math.round((totalBytes / quotaBytes) * 100)),
+      usagePercent: Math.min(100, roundMetric1((totalBytes / quotaBytes) * 100)),
       warning: this.lastStorageWarning,
       breakdown,
     };

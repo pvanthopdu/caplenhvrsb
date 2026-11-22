@@ -13,7 +13,18 @@ import {
   normalizeStatus,
 } from '../types';
 import { repository } from '../services/repository';
-import { formatDateTime, getStatusInfo, getReturnScopeLabel } from '../utils/formatters';
+import {
+  formatDateTime,
+  formatMetric1,
+  getStatusInfo,
+  getReturnScopeLabel,
+  roundMetric1,
+  roundOverdueMinutes,
+} from '../utils/formatters';
+import {
+  DEPT_PROCESSING_STATUSES,
+  OFFICE_TRACKING_QUEUE_STATUSES,
+} from '../utils/systemMetrics';
 import {
   Clock,
   CheckCircle2,
@@ -77,15 +88,7 @@ const DEPT_QUEUE_STATUSES = [
   'TAM_GIU_BIEN_PHONG',
 ];
 
-const DEPT_ACTIONABLE_STATUSES = [
-  'DA_CHAP_THUAN',
-  'CHO_SO_XU_LY',
-  'OFFICE_TRA_LAI',
-  'DA_DUYET',
-  'DANG_TRINH_OFFICE',
-  'TAM_DUNG_THOI_TIET',
-  'TAM_GIU_BIEN_PHONG',
-];
+const DEPT_ACTIONABLE_STATUSES: readonly string[] = DEPT_PROCESSING_STATUSES;
 
 const AUTO_WEATHER_CAPTURE_STATUSES = [
   'DA_CHAP_THUAN',
@@ -142,11 +145,11 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
       .map((t) => {
         const st = normalizeStatus(t.status);
         const clock = repository.computeDeptClockMinutes(t, nowTick);
-        const remainingMinutes = deptLimit - clock.netMinutes;
+        const remainingMinutes = roundMetric1(deptLimit - clock.netMinutes);
         const isActionable = DEPT_ACTIONABLE_STATUSES.includes(st);
         const isOverdue =
           st === 'TAM_GIU_BIEN_PHONG' ||
-          (isActionable && st !== 'TAM_DUNG_THOI_TIET' && clock.netMinutes >= deptLimit);
+          (isActionable && st !== 'TAM_DUNG_THOI_TIET' && clock.isRed);
         const isUrgentNearExpiry =
           !isOverdue &&
           isActionable &&
@@ -249,6 +252,7 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
   const [permitPdfName, setPermitPdfName] = useState<string>('');
   const [permitPdfUrl, setPermitPdfUrl] = useState<string>('');
   const [permitServerPath, setPermitServerPath] = useState<string>('');
+  const [pendingPermitFile, setPendingPermitFile] = useState<File | null>(null);
   const [isUploadingPdf, setIsUploadingPdf] = useState<boolean>(false);
 
   // Revoke modal
@@ -293,9 +297,9 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
 
   const listSummary = useMemo(() => {
     const actionableCount = prioritizedQueue.filter((i) => i.isActionable).length;
-    const urgentCount = prioritizedQueue.filter((i) => i.urgencyTier <= 1).length;
+    const urgentCount = prioritizedQueue.filter((i) => i.isActionable && i.urgencyTier <= 1).length;
     const officeCount = prioritizedQueue.filter((i) =>
-      ['DA_DUYET', 'DANG_TRINH_OFFICE', 'OFFICE_TRA_LAI'].includes(i.st)
+      OFFICE_TRACKING_QUEUE_STATUSES.includes(i.st)
     ).length;
     return { actionableCount, urgentCount, officeCount, total: prioritizedQueue.length };
   }, [prioritizedQueue]);
@@ -332,6 +336,7 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     setPermitPdfName(trip.issuedPdfName || '');
     setPermitPdfUrl(trip.issuedPdfUrl || '');
     setPermitServerPath(trip.issuedPdfServerPath || '');
+    setPendingPermitFile(null);
   }, [selectedTripId]);
 
   const handleOpenProcessTrip = (targetTrip: TripRecord) => {
@@ -552,7 +557,7 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
                   {listPagination.pageItems.map((item) => {
                     const { trip: t, st, clock, remainingMinutes, isOverdue, isUrgentNearExpiry } = item;
                     const stInfo = getStatusInfo(t.status);
-                    const pct = Math.min(100, Math.max(0, Math.round((clock.netMinutes / deptLimit) * 100)));
+                    const pct = Math.min(100, Math.max(0, roundMetric1((clock.netMinutes / deptLimit) * 100)));
                     const wxRec = t.weatherCheckRecord;
 
                     return (
@@ -578,32 +583,32 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
                                   <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                                   {st === 'TAM_GIU_BIEN_PHONG'
                                     ? 'Khẩn cấp · BP tạm giữ'
-                                    : `Quá hạn +${Math.abs(remainingMinutes)} phút`}
+                                    : `Quá hạn +${clock.overdueMinutes || roundOverdueMinutes(clock.netMinutes - deptLimit)} phút`}
                                 </span>
                                 <span className="text-[11px] text-rose-700/90 font-medium block">
-                                  Đã xử lý {clock.netMinutes}/{deptLimit}p
+                                  Đã xử lý {formatMetric1(clock.netMinutes)}/{deptLimit}p
                                 </span>
                               </div>
                             ) : isUrgentNearExpiry ? (
                               <div className="space-y-0.5">
                                 <span className="font-black text-amber-800 flex items-center gap-1">
                                   <Clock className="w-3.5 h-3.5 shrink-0" />
-                                  Gấp · Còn {Math.max(0, remainingMinutes)} phút
+                                  Gấp · Còn {formatMetric1(Math.max(0, remainingMinutes))} phút
                                 </span>
                                 <span className="text-[11px] text-amber-800/90 font-medium block">
                                   {st === 'OFFICE_TRA_LAI'
                                     ? 'Office trả lại cần xử lý ngay'
-                                    : `Đã qua ${clock.netMinutes}/${deptLimit}p`}
+                                    : `Đã qua ${formatMetric1(clock.netMinutes)}/${deptLimit}p`}
                                 </span>
                               </div>
                             ) : (
                               <div className="space-y-0.5">
                                 <span className="font-bold text-[#07244d] flex items-center gap-1">
                                   <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                                  Còn {Math.max(0, remainingMinutes)} phút
+                                  Còn {formatMetric1(Math.max(0, remainingMinutes))} phút
                                 </span>
                                 <span className="text-[11px] text-slate-500 block">
-                                  Đã qua {clock.netMinutes}/{deptLimit}p
+                                  Đã qua {formatMetric1(clock.netMinutes)}/{deptLimit}p
                                 </span>
                               </div>
                             )}
@@ -830,15 +835,26 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     );
   };
 
-  const handleApproveDraft = () => {
+  const handleApproveDraft = async () => {
     setActionErrorMsg(null);
     const res = repository.approveDeptDraft(trip.id, currentUser);
-    if (!res.success) {
+    if (!res.success || !res.trip) {
       setActionErrorMsg(res.error || 'Không thể duyệt dự thảo Giấy phép.');
       return;
     }
+    const linkedIncoming = repository
+      .getIncomingDossiers()
+      .find((d) => d.tripId === res.trip!.id || d.tripNumber === res.trip!.tripNumber);
+    const archiveRes = await dossierArchiveService.archiveApprovedOrIssuedTrip(res.trip, {
+      stage: 'DRAFT_APPROVED',
+      vessel,
+      incomingDossier: linkedIncoming,
+      actorName: currentUser.fullName,
+    });
     setActionSuccessMsg(
-      `Đã duyệt dự thảo Giấy phép cho ${trip.tripNumber}. Chuyên viên có thể xem/tải bản trình Office (chưa có dấu đỏ) và đánh dấu Đã trình Office.`
+      archiveRes.success
+        ? `Đã duyệt dự thảo Giấy phép cho ${trip.tripNumber} và tự động lưu trữ vào Server (CAPLENHVAORA/${archiveRes.folderPath} — thời hạn 5 năm). Chuyên viên có thể xuất Word/PDF trình ký Office.`
+        : `Đã duyệt dự thảo Giấy phép cho ${trip.tripNumber}. Chuyên viên có thể xem/tải bản trình Office (chưa có dấu đỏ) và đánh dấu Đã trình Office.`
     );
   };
 
@@ -905,10 +921,15 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
       } catch {
         // Giữ URL cục bộ nếu server archive không hoạt động
       }
+      setPendingPermitFile(file);
       setPermitPdfName(file.name);
       setPermitPdfUrl(finalUrl);
       setPermitServerPath(finalPath);
-      setActionSuccessMsg(`Đã chọn tệp Giấy phép đã ký số: "${file.name}". Nhấn "Phát hành Giấy phép lên ứng dụng" để hoàn tất.`);
+      setActionSuccessMsg(
+        finalPath
+          ? `Đã tải tệp Giấy phép ký số "${file.name}" lên Server (${finalPath}). Nhấn "Phát hành Giấy phép lên ứng dụng" để hoàn tất & lưu trữ trọn bộ hồ sơ.`
+          : `Đã chọn tệp Giấy phép đã ký số: "${file.name}". Nhấn "Phát hành Giấy phép lên ứng dụng" để hoàn tất và tự động lưu vào Server.`
+      );
     } catch (err: any) {
       setActionErrorMsg(err?.message || 'Không thể đọc tệp PDF đã chọn.');
     } finally {
@@ -916,30 +937,65 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
     }
   };
 
-  const handlePublishPermit = () => {
+  const handlePublishPermit = async () => {
     setActionErrorMsg(null);
-    const issuedIso = permitIssuedAtLocal
-      ? new Date(permitIssuedAtLocal).toISOString()
-      : new Date().toISOString();
-    const res = repository.publishOfficePermit(trip.id, currentUser, {
-      orderNumber: permitOrderNumber,
-      issuedAt: issuedIso,
-      pdfUrl:
-        permitPdfUrl ||
-        `/api/dossiers/${encodeURIComponent(trip.tripNumber)}/files/lenh-cap-phep/${encodeURIComponent(
-          permitPdfName || `Giay_Phep_${trip.tripNumber}.pdf`
-        )}`,
-      pdfName: permitPdfName || `Giay_Phep_${permitOrderNumber.replace(/[\/\\]/g, '_')}.pdf`,
-      serverPath: permitServerPath || undefined,
-      signerName: permitSignerName,
-    });
-    if (!res.success) {
-      setActionErrorMsg(res.error || 'Không thể phát hành Giấy phép.');
-      return;
+    setIsUploadingPdf(true);
+    try {
+      const issuedIso = permitIssuedAtLocal
+        ? new Date(permitIssuedAtLocal).toISOString()
+        : new Date().toISOString();
+      const defaultPdfFileName =
+        permitPdfName || `Giay_Phep_${permitOrderNumber.replace(/[\/\\\s]+/g, '_')}.pdf`;
+      const res = repository.publishOfficePermit(trip.id, currentUser, {
+        orderNumber: permitOrderNumber,
+        issuedAt: issuedIso,
+        pdfUrl:
+          permitPdfUrl ||
+          `/api/dossiers/${encodeURIComponent(trip.tripNumber)}/files/lenh-cap-phep/${encodeURIComponent(
+            defaultPdfFileName
+          )}`,
+        pdfName: defaultPdfFileName,
+        serverPath: permitServerPath || undefined,
+        signerName: permitSignerName,
+      });
+      if (!res.success || !res.trip) {
+        setActionErrorMsg(res.error || 'Không thể phát hành Giấy phép.');
+        return;
+      }
+
+      // Tự động lưu trọn bộ hồ sơ & Giấy phép (PDF + Word + JSON + giấy tờ đính kèm) vào Server theo quy định lưu trữ 5 năm
+      const linkedIncoming = repository
+        .getIncomingDossiers()
+        .find((d) => d.tripId === res.trip!.id || d.tripNumber === res.trip!.tripNumber);
+      const archiveRes = await dossierArchiveService.archiveApprovedOrIssuedTrip(res.trip, {
+        stage: 'PERMIT_ISSUED',
+        vessel,
+        incomingDossier: linkedIncoming,
+        actorName: currentUser.fullName,
+        uploadedPermitFile: pendingPermitFile,
+      });
+
+      if (archiveRes.success && archiveRes.permitPdfUrl) {
+        const updatedTrip: TripRecord = {
+          ...res.trip,
+          issuedPdfUrl: archiveRes.permitPdfUrl,
+          issuedPdfName: archiveRes.permitPdfName || res.trip.issuedPdfName,
+          issuedPdfServerPath: archiveRes.permitPdfServerPath || res.trip.issuedPdfServerPath,
+        };
+        repository.saveTrip(updatedTrip);
+        setPermitPdfUrl(archiveRes.permitPdfUrl);
+        if (archiveRes.permitPdfServerPath) setPermitServerPath(archiveRes.permitPdfServerPath);
+      }
+      setPendingPermitFile(null);
+
+      setActionSuccessMsg(
+        archiveRes.success
+          ? `Đã phát hành Giấy phép rời cảng số ${res.trip.orderNumber} lên ứng dụng và tự động lưu trữ trọn bộ hồ sơ vào Server (CAPLENHVAORA/${archiveRes.folderPath} · ${archiveRes.filesCount ?? 1} tệp · Lưu trữ 5 năm). Đã gửi thông báo cho Chủ tàu, BQL Cảng và Biên phòng tại ${trip.departurePortName}.`
+          : `Đã phát hành Giấy phép rời cảng số ${res.trip.orderNumber} lên ứng dụng! Đã gửi thông báo cho Chủ tàu, BQL Cảng và Biên phòng tại ${trip.departurePortName}.`
+      );
+    } finally {
+      setIsUploadingPdf(false);
     }
-    setActionSuccessMsg(
-      `Đã phát hành Giấy phép rời cảng số ${res.trip?.orderNumber} lên ứng dụng! Đã gửi thông báo cho Chủ tàu, BQL Cảng và Biên phòng tại ${trip.departurePortName}.`
-    );
   };
 
   const handleConfirmRevoke = () => {
@@ -1084,13 +1140,18 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
                   Đồng hồ Sở (Định mức {adminConfig.deptProcessingSlaMinutes}p)
                 </p>
                 <p className="text-[11px]">
-                  Tổng: <strong className="tabular-nums">{deptClock.rawMinutes}p</strong> • Tạm dừng:{' '}
-                  <strong className="tabular-nums">{deptClock.pausedMinutes}p</strong>
+                  Tổng: <strong className="tabular-nums">{formatMetric1(deptClock.rawMinutes)}p</strong> • Tạm dừng:{' '}
+                  <strong className="tabular-nums">{formatMetric1(deptClock.pausedMinutes)}p</strong>
+                  {deptClock.isRed && (
+                    <span className="ml-1.5 font-black text-rose-700">
+                      • Quá hạn +{deptClock.overdueMinutes} phút
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
             <span className="text-lg font-black tabular-nums">
-              {deptClock.netMinutes}/{adminConfig.deptProcessingSlaMinutes}p
+              {formatMetric1(deptClock.netMinutes)}/{adminConfig.deptProcessingSlaMinutes}p
             </span>
           </div>
         )}
@@ -1659,7 +1720,11 @@ export const InternalWorkflowPage: React.FC<InternalWorkflowPageProps> = ({
                       : 'bg-emerald-100 text-emerald-800'
                   }`}
                 >
-                  Trễ tải: {officeUploadMinutes}/{adminConfig.officeUploadSlaMinutes}p
+                  {officeUploadMinutes > adminConfig.officeUploadSlaMinutes
+                    ? `Quá hạn +${roundOverdueMinutes(
+                        officeUploadMinutes - adminConfig.officeUploadSlaMinutes
+                      )}p (${formatMetric1(officeUploadMinutes)}/${adminConfig.officeUploadSlaMinutes}p)`
+                    : `Thời gian tải: ${formatMetric1(officeUploadMinutes)}/${adminConfig.officeUploadSlaMinutes}p`}
                 </span>
               )}
             </div>

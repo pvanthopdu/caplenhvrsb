@@ -25,7 +25,16 @@ import { DeNghiDung, KiemSoatTaiBen, TripRecord } from '../types';
 import { getBpStopReasonLabel } from '../utils/formatters';
 
 export function round1(val: number): number {
+  if (!Number.isFinite(val)) return 0;
   return Math.round((val + Number.EPSILON) * 10) / 10;
+}
+
+/**
+ * Thời gian Quá hạn luôn làm tròn lên số nguyên (không có phần thập phân).
+ */
+export function roundOverdueUp(val: number): number {
+  if (!Number.isFinite(val) || val <= 0) return 0;
+  return Math.ceil(val);
 }
 
 /**
@@ -1153,9 +1162,9 @@ export function extractOverdueStageRows(
           actorName: actor.name || 'Chưa xác định',
           rawMinutes: raw,
           excludedMinutes: d.approvedExclusionMinutes[st.key] || 0,
-          netMinutes: net,
+          netMinutes: round1(net),
           normMinutes: st.norm,
-          lateMinutes: Math.max(0, round1(net - st.norm)),
+          lateMinutes: net > st.norm ? roundOverdueUp(net - st.norm) : 0,
           exclusions: relatedExcl,
         });
       }

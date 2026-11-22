@@ -6,7 +6,7 @@
 import React, { useMemo, useState } from 'react';
 import { UserAccount } from '../../types';
 import { KpiExclusionReason, KpiTimeExclusion } from '../../types/kpi';
-import { OverdueStageRow, formatViNumber } from '../../services/kpiEngine';
+import { OverdueStageRow, formatViNumber, formatViInteger } from '../../services/kpiEngine';
 import { repository } from '../../services/repository';
 import {
   Search,
@@ -285,7 +285,7 @@ export const KpiOverdueExclusionTab: React.FC<KpiOverdueExclusionTabProps> = ({
                       <td className="py-3 px-3 text-right font-mono whitespace-nowrap">
                         {row.lateMinutes > 0 ? (
                           <span className="font-extrabold text-red-700">
-                            +{formatViNumber(row.lateMinutes, 1)} ph
+                            +{formatViInteger(row.lateMinutes)} ph
                           </span>
                         ) : (
                           <span className="font-bold text-emerald-700">Đạt sau trừ</span>

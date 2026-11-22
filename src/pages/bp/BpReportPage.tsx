@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { BarChart3, Download, Filter, ShieldAlert, Users } from 'lucide-react';
 import { UserAccount } from '../../types';
@@ -11,7 +11,10 @@ import { repository } from '../../services/repository';
 import {
   BP_STOP_REASON_OPTIONS,
   formatDateTime,
+  formatMetric1,
   getBpStopReasonLabel,
+  getLocalIsoDate,
+  roundMetric1,
 } from '../../utils/formatters';
 import { PaginationBar, usePagination } from '../../components/PaginationBar';
 
@@ -20,19 +23,24 @@ interface BpReportPageProps {
 }
 
 export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getLocalIsoDate();
   const currentMonthStr = todayStr.slice(0, 7);
 
+  const [repoTick, setRepoTick] = useState(0);
   const [periodMode, setPeriodMode] = useState<'DAY' | 'MONTH'>('MONTH');
   const [selectedDay, setSelectedDay] = useState(todayStr);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
   const [portFilter, setPortFilter] = useState<string>('ALL');
 
-  const bpConfig = useMemo(() => repository.getBpConfig(), []);
-  const ports = useMemo(() => repository.getPorts(), []);
-  const trips = useMemo(() => repository.getTrips(), []);
-  const deNghiDungs = useMemo(() => repository.getDeNghiDungs(), []);
-  const kiemSoatList = useMemo(() => repository.getKiemSoatList(), []);
+  useEffect(() => {
+    return repository.subscribe(() => setRepoTick((t) => t + 1));
+  }, []);
+
+  const bpConfig = useMemo(() => repository.getBpConfig(), [repoTick]);
+  const ports = useMemo(() => repository.getPorts(), [repoTick]);
+  const trips = useMemo(() => repository.getTrips(), [repoTick]);
+  const deNghiDungs = useMemo(() => repository.getDeNghiDungs(), [repoTick]);
+  const kiemSoatList = useMemo(() => repository.getKiemSoatList(), [repoTick]);
 
   const periodMatch = (isoOrDate?: string) => {
     if (!isoOrDate) return false;
@@ -104,12 +112,14 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
     const liftDurations = liftedStops
       .map((d) => {
         if (!d.thoiDiemGo) return 0;
-        return Math.max(0, Math.round((new Date(d.thoiDiemGo).getTime() - new Date(d.thoiDiem).getTime()) / 60000));
+        return roundMetric1(
+          Math.max(0, (new Date(d.thoiDiemGo).getTime() - new Date(d.thoiDiem).getTime()) / 60000)
+        );
       })
       .filter((v) => Number.isFinite(v));
     const avgResolveMinutes =
       liftDurations.length > 0
-        ? Math.round((liftDurations.reduce((a, b) => a + b, 0) / liftDurations.length) * 10) / 10
+        ? roundMetric1(liftDurations.reduce((a, b) => a + b, 0) / liftDurations.length)
         : 0;
 
     return {
@@ -166,7 +176,7 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
     const stopsSheet = filteredStops.map((d, idx) => {
       const trip = trips.find((t) => t.id === d.hoSoId);
       const durMin = d.thoiDiemGo
-        ? Math.max(0, Math.round((new Date(d.thoiDiemGo).getTime() - new Date(d.thoiDiem).getTime()) / 60000))
+        ? roundMetric1(Math.max(0, (new Date(d.thoiDiemGo).getTime() - new Date(d.thoiDiem).getTime()) / 60000))
         : null;
       return {
         STT: idx + 1,
@@ -325,7 +335,7 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
           <p className="text-xs text-red-700 font-medium">Tạm giữ / Đình chỉ</p>
           <p className="text-2xl font-bold font-mono tabular-nums text-red-800 mt-1">{summary.totalStops}</p>
           <p className="text-[11px] text-red-700 mt-0.5 font-mono">
-            TB gỡ: {summary.avgResolveMinutes} phút
+            TB gỡ: {formatMetric1(summary.avgResolveMinutes)} phút
           </p>
         </div>
         <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3.5">
@@ -399,7 +409,7 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
                 {stopsPagination.pageItems.map((d) => {
                   const trip = trips.find((t) => t.id === d.hoSoId);
                   const durMin = d.thoiDiemGo
-                    ? Math.max(0, Math.round((new Date(d.thoiDiemGo).getTime() - new Date(d.thoiDiem).getTime()) / 60000))
+                    ? roundMetric1(Math.max(0, (new Date(d.thoiDiemGo).getTime() - new Date(d.thoiDiem).getTime()) / 60000))
                     : null;
                   return (
                     <tr key={d.id}>
@@ -417,7 +427,7 @@ export const BpReportPage: React.FC<BpReportPageProps> = ({ currentUser }) => {
                       </td>
                       <td className="px-3 py-2.5 align-top font-mono tabular-nums text-xs">
                         {durMin !== null ? (
-                          <span className="text-emerald-700 font-bold">{durMin} phút</span>
+                          <span className="text-emerald-700 font-bold">{formatMetric1(durMin)} phút</span>
                         ) : (
                           <span className="text-red-700 font-bold">Đang tạm giữ</span>
                         )}

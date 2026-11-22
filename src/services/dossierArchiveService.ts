@@ -310,6 +310,142 @@ export const dossierArchiveService = {
   },
 
   /**
+   * Tự động lưu trọn bộ hồ sơ & Giấy phép vào Server theo quy định lưu trữ (5 năm)
+   * khi hồ sơ được duyệt dự thảo hoặc phát hành Giấy phép lên ứng dụng.
+   */
+  async archiveApprovedOrIssuedTrip(
+    trip: TripRecord,
+    options: {
+      stage: 'DRAFT_APPROVED' | 'PERMIT_ISSUED';
+      vessel?: import('../types').Vessel;
+      incomingDossier?: IncomingDossier | null;
+      actorName?: string;
+      uploadedPermitFile?: File | null;
+    }
+  ): Promise<{
+    success: boolean;
+    folderPath?: string;
+    permitPdfUrl?: string;
+    permitPdfName?: string;
+    permitPdfServerPath?: string;
+    filesCount?: number;
+    error?: string;
+  }> {
+    const cleanCode = trip.tripNumber?.trim();
+    if (!cleanCode) {
+      return { success: false, error: 'Thiếu mã hồ sơ để lưu trữ lên Server.' };
+    }
+
+    try {
+      const { buildOrderWordDocument, buildPermitArchivePdfBlob } = await import(
+        '../utils/exportUtils'
+      );
+
+      let permitPdfUrl = trip.issuedPdfUrl;
+      let permitPdfName = trip.issuedPdfName;
+      let permitPdfServerPath = trip.issuedPdfServerPath;
+
+      // 1. Lưu bản Word (.doc) chính thức của dự thảo / giấy phép vào thư mục lenh-cap-phep/
+      const wordDoc = buildOrderWordDocument(trip, options.vessel);
+      const wordFileName =
+        options.stage === 'PERMIT_ISSUED' && trip.orderNumber
+          ? `Giay_Phep_Roi_Cang_${trip.orderNumber.replace(/[\/\\\s]+/g, '_')}.doc`
+          : `Du_Thao_Giay_Phep_${cleanCode}.doc`;
+
+      await this.uploadBlobToDossier(cleanCode, 'lenh-cap-phep', wordDoc.blob, {
+        fileName: wordFileName,
+        mimeType: 'application/msword',
+        category: options.stage === 'PERMIT_ISSUED' ? 'ISSUED_ORDER_DOC' : 'DRAFT_ORDER_DOC',
+        categoryName:
+          options.stage === 'PERMIT_ISSUED'
+            ? 'Giấy phép rời cảng (Word lưu trữ)'
+            : 'Dự thảo Giấy phép đã duyệt (Word)',
+        note:
+          options.stage === 'PERMIT_ISSUED'
+            ? `Tự động lưu trữ khi phát hành Giấy phép số ${trip.orderNumber || cleanCode}`
+            : `Tự động lưu trữ khi duyệt dự thảo hồ sơ ${cleanCode}`,
+        uploadedByName: options.actorName,
+        overwriteSameName: true,
+      });
+
+      // 2. Khi phát hành Giấy phép: đảm bảo có tệp PDF thực tế được lưu trong lenh-cap-phep/ trên Server
+      if (options.stage === 'PERMIT_ISSUED') {
+        const alreadyOnServer = Boolean(
+          permitPdfServerPath && permitPdfUrl && permitPdfUrl.startsWith('/api/dossiers/')
+        );
+
+        if (options.uploadedPermitFile && !alreadyOnServer) {
+          const uploadedPdf = await this.uploadBlobToDossier(
+            cleanCode,
+            'lenh-cap-phep',
+            options.uploadedPermitFile,
+            {
+              fileName: options.uploadedPermitFile.name,
+              mimeType: options.uploadedPermitFile.type || 'application/pdf',
+              category: 'ISSUED_ORDER_PDF',
+              categoryName: 'Giấy phép rời cảng PDF đã ký số trên Office',
+              note: `Tự động lưu trữ bản PDF phát hành số ${trip.orderNumber || cleanCode}`,
+              uploadedByName: options.actorName,
+              overwriteSameName: true,
+            }
+          );
+          permitPdfUrl = uploadedPdf.downloadUrl;
+          permitPdfName = uploadedPdf.originalFileName;
+          permitPdfServerPath = uploadedPdf.relativePath;
+        } else if (!alreadyOnServer) {
+          const generatedPdf = buildPermitArchivePdfBlob(trip, options.vessel);
+          const uploadedPdf = await this.uploadBlobToDossier(
+            cleanCode,
+            'lenh-cap-phep',
+            generatedPdf.blob,
+            {
+              fileName: generatedPdf.fileName,
+              mimeType: 'application/pdf',
+              category: 'ISSUED_ORDER_PDF',
+              categoryName: 'Giấy phép rời cảng (PDF lưu trữ điện tử)',
+              note: `Tự động khởi tạo & lưu trữ PDF khi phát hành Giấy phép số ${trip.orderNumber || cleanCode}`,
+              uploadedByName: options.actorName,
+              overwriteSameName: true,
+            }
+          );
+          permitPdfUrl = uploadedPdf.downloadUrl;
+          permitPdfName = uploadedPdf.originalFileName;
+          permitPdfServerPath = uploadedPdf.relativePath;
+        }
+      }
+
+      // 3. Đồng bộ đầy đủ giấy tờ đính kèm (giay-to/) + JSON hồ sơ + thong-tin-lenh.json + manifest.json
+      const tripToSync: TripRecord = {
+        ...trip,
+        issuedPdfUrl: permitPdfUrl,
+        issuedPdfName: permitPdfName,
+        issuedPdfServerPath: permitPdfServerPath,
+      };
+      const synced = await this.syncTripToServer(tripToSync, {
+        incomingDossier: options.incomingDossier ?? null,
+        actorName: options.actorName,
+        syncPendingAttachments: true,
+      });
+
+      return {
+        success: Boolean(synced.dossier),
+        folderPath: synced.dossier
+          ? `${synced.dossier.folderName}/lenh-cap-phep/`
+          : `${cleanCode}/lenh-cap-phep/`,
+        permitPdfUrl,
+        permitPdfName,
+        permitPdfServerPath,
+        filesCount: synced.dossier?.files.length,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || 'Không thể tự động lưu hồ sơ lên Server.',
+      };
+    }
+  },
+
+  /**
    * Đồng bộ nền không chặn giao diện mỗi khi hồ sơ chuyến thay đổi trạng thái/dữ liệu
    */
   queueTripSync(trip: TripRecord, incomingDossier?: IncomingDossier | null, actorName?: string): void {

@@ -21,7 +21,13 @@ import {
 import { TripRecord, UserAccount } from '../../types';
 import { repository } from '../../services/repository';
 import { downloadOrderPdf } from '../../utils/exportUtils';
-import { formatDateTime, formatTime } from '../../utils/formatters';
+import {
+  formatDateTime,
+  formatMetric1,
+  formatTime,
+  roundMetric1,
+  roundOverdueMinutes,
+} from '../../utils/formatters';
 import { getUserAssignedPortId, normalizeStatus } from '../../utils/userPermissions';
 import { BpDossierReadOnlyModal } from '../../components/bp/BpDossierReadOnlyModal';
 import { PaginationBar, usePagination } from '../../components/PaginationBar';
@@ -104,7 +110,7 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
 
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  const bpConfig = useMemo(() => repository.getBpConfig(), []);
+  const bpConfig = useMemo(() => repository.getBpConfig(), [nowMs]);
   const trips = useMemo(() => repository.getTrips(), [nowMs]);
   const userPort = useMemo(() => getUserAssignedPortId(currentUser), [currentUser]);
 
@@ -125,15 +131,17 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
       .map((trip) => {
         const depIso = trip.actualDepartureTime || trip.scheduledDepartureTime;
         const depMs = new Date(depIso).getTime();
-        const elapsedMinutes = Number.isNaN(depMs)
+        const rawElapsed = Number.isNaN(depMs)
           ? 0
-          : Math.max(0, Math.round((nowMs - depMs) / 60000));
+          : Math.max(0, (nowMs - depMs) / 60000);
+        const elapsedMinutes = roundMetric1(rawElapsed);
         const isOutbound = trip.departurePortId === 'PORT-01';
         const standardMinutes = isOutbound
           ? bpConfig.standardTransitMinutesOutbound
           : bpConfig.standardTransitMinutesInbound;
         const alertThreshold = standardMinutes + bpConfig.overdueGraceMinutes;
-        const isOverdue = elapsedMinutes > alertThreshold;
+        const isOverdue = rawElapsed > alertThreshold;
+        const overdueMinutes = isOverdue ? roundOverdueMinutes(rawElapsed - alertThreshold) : 0;
 
         return {
           trip,
@@ -142,6 +150,7 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
           standardMinutes,
           alertThreshold,
           isOverdue,
+          overdueMinutes,
         };
       })
       .sort((a, b) => Number(b.isOverdue) - Number(a.isOverdue) || b.elapsedMinutes - a.elapsedMinutes);
@@ -359,7 +368,7 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
       )}
 
       <div className="space-y-3">
-        {pagination.pageItems.map(({ trip, depIso, elapsedMinutes, standardMinutes, alertThreshold, isOverdue }) => {
+        {pagination.pageItems.map(({ trip, depIso, elapsedMinutes, standardMinutes, alertThreshold, isOverdue, overdueMinutes }) => {
           const sar = getSarOnboardManifest(trip);
           const paxCount = sar.paxCount;
           const crewCount = sar.crewCount;
@@ -400,7 +409,8 @@ export const BpAtSeaMonitorPage: React.FC<BpAtSeaMonitorPageProps> = ({ currentU
                 >
                   <Clock className="w-4 h-4" />
                   <span>
-                    Đã chạy {elapsedMinutes} phút (Ngưỡng {alertThreshold}p)
+                    Đã chạy {formatMetric1(elapsedMinutes)} phút (Ngưỡng {alertThreshold}p)
+                    {isOverdue && overdueMinutes > 0 ? ` · Quá hạn +${overdueMinutes} phút` : ''}
                   </span>
                 </div>
               </div>

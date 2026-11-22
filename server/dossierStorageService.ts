@@ -309,11 +309,26 @@ export class DossierStorageService {
     const { folderName, dirPath } = await this.ensureDossierFolder(rawTripNumber);
     const now = new Date().toISOString();
 
+    const nowDate = new Date(now);
+    const retentionUntilDate = new Date(nowDate);
+    retentionUntilDate.setFullYear(retentionUntilDate.getFullYear() + 5);
+    const anonymizeAfterDate = new Date(nowDate);
+    anonymizeAfterDate.setMonth(anonymizeAfterDate.getMonth() + 12);
+    const storagePolicy = {
+      retentionYears: 5,
+      retentionUntil: retentionUntilDate.toISOString(),
+      anonymizePersonalDataAfterMonths: 12,
+      anonymizeAfterDate: anonymizeAfterDate.toISOString(),
+      regulation:
+        'Lưu trữ hồ sơ 5 năm theo quy định chứng từ hàng hải & ẩn danh dữ liệu cá nhân sau 12 tháng theo Nghị định 356/2025/NĐ-CP',
+    };
+
     const tripJsonPath = resolveConfinedPath(dirPath, 'ho-so-chuyen.json');
     await writeJsonAtomic(tripJsonPath, {
       archivedAt: now,
       archivedBy: actorName || actorEmail || 'Hệ thống',
       dossierCode: folderName,
+      storagePolicy,
       trip,
     });
 
@@ -322,13 +337,23 @@ export class DossierStorageService {
       await writeJsonAtomic(incomingPath, {
         archivedAt: now,
         dossierCode: folderName,
+        storagePolicy,
         incomingDossier,
       });
     }
 
-    // Lưu bản ghi JSON thông tin Lệnh cấp phép rời cảng nếu đã có số hiệu lệnh / chữ ký / phê duyệt
+    // Lưu bản ghi JSON thông tin Lệnh/Giấy phép rời cảng khi đã duyệt dự thảo hoặc phát hành giấy phép
     const phase4Pdf = Array.isArray(trip.internalPhases) ? trip.internalPhases[3] : undefined;
-    if (trip.orderNumber || trip.approvedAt || phase4Pdf?.uploadedPdfName) {
+    const hasPermitOrApproval = Boolean(
+      trip.orderNumber ||
+        trip.issuedAt ||
+        trip.approvedAt ||
+        trip.deptApprovedAt ||
+        trip.issuedPdfName ||
+        trip.issuedPdfUrl ||
+        phase4Pdf?.uploadedPdfName
+    );
+    if (hasPermitOrApproval) {
       const orderInfoPath = resolveConfinedPath(dirPath, 'lenh-cap-phep', 'thong-tin-lenh.json');
       await writeJsonAtomic(orderInfoPath, {
         tripNumber: trip.tripNumber || folderName,
@@ -340,15 +365,24 @@ export class DossierStorageService {
         departurePortName: trip.departurePortName || null,
         arrivalPortName: trip.arrivalPortName || null,
         scheduledDepartureTime: trip.scheduledDepartureTime || null,
+        deptApprovedById: trip.deptApprovedById || null,
+        deptApprovedByName: trip.deptApprovedByName || null,
+        deptApprovedAt: trip.deptApprovedAt || null,
         approvedById: trip.approvedById || null,
         approvedByName: trip.approvedByName || null,
         approvedByTitle: trip.approvedByTitle || null,
-        approvedAt: trip.approvedAt || null,
+        approvedAt: trip.approvedAt || trip.issuedAt || null,
+        issuedAt: trip.issuedAt || null,
+        sealedAt: trip.sealedAt || null,
+        sealedByName: trip.sealedByName || null,
         orderValidUntil: trip.orderValidUntil || null,
         verificationCode: trip.verificationCode || null,
         qrPayloadUrl: trip.qrPayloadUrl || null,
-        signedPdfFileName: phase4Pdf?.uploadedPdfName || null,
-        signedPdfServerUrl: phase4Pdf?.uploadedPdfUrl || null,
+        signedPdfFileName: trip.issuedPdfName || phase4Pdf?.uploadedPdfName || null,
+        signedPdfServerUrl: trip.issuedPdfUrl || phase4Pdf?.uploadedPdfUrl || null,
+        signedPdfServerPath: trip.issuedPdfServerPath || phase4Pdf?.uploadedPdfServerPath || null,
+        weatherCheckRecord: trip.weatherCheckRecord || null,
+        storagePolicy,
         updatedAt: now,
       });
     }
@@ -363,6 +397,7 @@ export class DossierStorageService {
     manifest.status = typeof trip.status === 'string' ? trip.status : manifest.status;
     manifest.updatedAt = now;
     manifest.lastSyncedBy = actorName || actorEmail || manifest.lastSyncedBy;
+    (manifest as any).storagePolicy = storagePolicy;
 
     const manifestPath = resolveConfinedPath(dirPath, 'manifest.json');
     await writeJsonAtomic(manifestPath, manifest);

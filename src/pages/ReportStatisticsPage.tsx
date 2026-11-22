@@ -7,6 +7,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { UserAccount, normalizeStatus } from '../types';
 import { repository } from '../services/repository';
 import { computeBpKpiSummary, buildDossierSummaries, computeUnitMetrics } from '../services/kpiEngine';
+import { roundMetric1 } from '../utils/formatters';
 import { exportTripsToExcel } from '../utils/exportUtils';
 import { CoastalPageHero } from '../components/CoastalPageHero';
 import {
@@ -70,22 +71,22 @@ export const ReportStatisticsPage: React.FC<ReportStatisticsPageProps> = ({
     const completedTrips = trips.filter((t) => normalizeStatus(t.status) === 'DA_CAP_BEN').length;
     const underwayTrips = trips.filter((t) => normalizeStatus(t.status) === 'DA_XUAT_BEN').length;
     const totalPassengers = trips.reduce((sum, t) => sum + (t.passengerCount || 0), 0);
-    const totalCargo = Number(trips.reduce((sum, t) => sum + (t.cargoTons || 0), 0).toFixed(1));
+    const totalCargo = roundMetric1(trips.reduce((sum, t) => sum + (t.cargoTons || 0), 0));
     const returnedOrRejected = trips.filter((t) =>
       ['TRA_CHU_TAU', 'KHONG_CHAP_THUAN', 'TRA_BQL_CANG', 'OFFICE_TRA_LAI'].includes(
         normalizeStatus(t.status)
       )
     ).length;
-    const rejectRate = totalTrips > 0 ? ((returnedOrRejected / totalTrips) * 100).toFixed(1) : '0.0';
-    const bqlOnTimeRate = unitMetrics.bqlOnTimeRate.toFixed(1);
-    const soOnTimeRate = unitMetrics.soOnTimeRate.toFixed(1);
+    const rejectRate = totalTrips > 0 ? roundMetric1((returnedOrRejected / totalTrips) * 100).toFixed(1) : '0.0';
+    const bqlOnTimeRate = roundMetric1(unitMetrics.bqlOnTimeRate).toFixed(1);
+    const soOnTimeRate = roundMetric1(unitMetrics.soOnTimeRate).toFixed(1);
 
     return {
       totalTrips,
       completedTrips,
       underwayTrips,
       totalPassengers,
-      totalCargo,
+      totalCargo: totalCargo.toFixed(1),
       returnedOrRejected,
       rejectRate,
       bqlOnTimeRate,
@@ -167,7 +168,7 @@ export const ReportStatisticsPage: React.FC<ReportStatisticsPageProps> = ({
     const uploadLimit = kpiConfig.timeNorms.office_upload_limit || 10;
 
     const findMedian = (key: string) =>
-      unitMetrics.stageMedians.find((s) => s.stageKey === key)?.medianMinutes ?? 0;
+      roundMetric1(unitMetrics.stageMedians.find((s) => s.stageKey === key)?.medianMinutes ?? 0);
 
     return [
       { stage: 'Đồng hồ 1: BQL Cảng', actual: findMedian('BQL_60'), sla: bqlLimit },
